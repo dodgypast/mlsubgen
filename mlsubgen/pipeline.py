@@ -195,26 +195,32 @@ class NotSupported(Exception):
     """The file's dominant language is not one we subtitle from (or could not be determined)."""
 
 
-def stage_lid(job: Job, data: dict, audio, spans: list[Span], engines: Engines) -> lid.LidResult:
-    """Label every span with its language (cached per LID_VERSION; --source forces one language)."""
+def stage_lid(job: Job, data: dict, audio, spans: list[Span], engines: Engines, turns=None) -> lid.LidResult:
+    """Label every span with its language (cached per LID_VERSION and speaker mode; --source forces one language).
+    With `turns` (the speakers stage, run before this one) the detector is speaker-aware: its result's spans are
+    the VAD spans cut at speaker changes, so callers must take `res.spans` for the chunking."""
     if job.source:
         res = lid.forced(spans, job.source)
         data["lid"] = res.to_dict()
         work.save(job.work_file, data)
         _log(f"[lid] {res.summary()}")
         return res
+    mode = job.speakers if turns else "off"
     cached = data.get("lid")
     if cached and cached.get("version") == config.LID_VERSION and not cached.get("forced") \
-            and len(cached.get("spans", [])) == len(spans):
+            and cached.get("speakers", "off") == mode:
         res = lid.LidResult.from_dict(cached)
-        for s, c in zip(spans, res.spans):
-            s.lang = c.lang
-        res.spans = spans
-        _log(f"[lid] cached: {res.summary()}")
-        return res
+        if len(res.spans) == len(spans):
+            for s, c in zip(spans, res.spans):
+                s.lang, s.speaker = c.lang, c.speaker
+            res.spans = spans
+        if res.spans:
+            _log(f"[lid] cached: {res.summary()}")
+            return res
     t0 = time.time()
-    res = lid.identify(audio, spans, engines)
+    res = lid.identify(audio, spans, engines, turns=turns)
     data["lid"] = res.to_dict()
+    data["lid"]["speakers"] = mode
     work.save(job.work_file, data)
     _log(f"[lid] {res.summary()}  ({len(res.windows)} windows, {time.time() - t0:.0f}s)"
          + (f"  — {'; '.join(res.notes)}" if res.notes else ""))
@@ -447,6 +453,20 @@ def stage_speakers(job: Job, data: dict, audio) -> list:
                         "elapsed": round(time.time() - t0, 1)}
     work.save(job.work_file, data)
     _log(f"[speakers] {spk.summary(turns)} in {time.time() - t0:.0f}s")
+    return turns
+
+
+def usable_turns(data: dict) -> list:
+    """The cached speaker turns, or [] when the diarization failed the cluster-count gate (one voice, or so many
+    clusters that it is fragmentation): the detector then runs exactly as without --speakers (0.4.4)."""
+    from . import speakers as spk
+    s = data.get("speakers") or {}
+    if not s.get("turns"):
+        return []
+    turns = [spk.Turn(a, b, l) for a, b, l in s["turns"]]
+    clusters = len({t.speaker for t in turns})
+    if clusters < config.SPEAKER_MIN_CLUSTERS or clusters > max(8, len(turns) * config.SPEAKER_MAX_CLUSTER_RATIO):
+        return []
     return turns
 
 

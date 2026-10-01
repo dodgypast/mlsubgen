@@ -181,6 +181,13 @@ LID_VERSION = 3                # v3 (2026-10-01): function-word evidence for Lat
                                # single windows survive the smoothing, switch points refined to the exact span. Cached
                                # v2 verdicts are redone; remembered skips are keyed by DETECT_VERSION and are not
 LID_STRONG_MARGIN = 0.6        # a non-dominant run shorter than LID_SWITCH_MIN_WINDOWS survives when every window's margin is ≥ this
+# speaker-aware detection (0.4.4, with --speakers): spans cut at speaker turns, a window is one voice, every voice
+# sampled, and a voice's language history is evidence for its uncertain windows — never for its confident ones
+LID_SPEAKER_SAMPLES = 2        # every voice gets at least this many of its windows judged in the first pass
+LID_PRIOR_MIN_SPEECH = 8.0     # a voice needs this much confidently labelled speech before it has a prior
+LID_PRIOR_STRONG = 0.5         # the prior's weight when one language is ≥ 90 % of the voice's confident speech …
+LID_PRIOR_WEAK = 0.25          # … ≥ 65 %; below that a voice is bilingual and has no prior at all
+LID_SAME_SPEAKER_REACH = 6     # an uncertain window inherits from a confident window of its own voice this many windows away
 LID_WINDOW_SPEECH_SEC = 10.0   # a detection window = consecutive VAD spans until this much SPEECH (not audio)
 LID_WINDOW_MAX_AUDIO_SEC = 30.0
 LID_SAMPLE_WINDOWS = 24        # first pass: this many windows spread over the file; every window if a 2nd language shows

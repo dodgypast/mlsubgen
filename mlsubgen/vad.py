@@ -15,6 +15,7 @@ class Span:
     start: float
     end: float
     lang: str | None = None      # set by the LID; None = not decided / not applicable
+    speaker: str = ""            # set when the speakers stage ran before the LID (0.4.4): the voice in this span
 
     @property
     def dur(self) -> float:
@@ -133,15 +134,26 @@ def cover_chunks(audio: np.ndarray, spans: list[Span], total_dur: float, max_len
             return hi
         return (f0 + int(np.argmin(rms[f0:f1]))) / 10.0
 
+    # a language change between two labelled spans always cuts a chunk (0.4.4): a chunk is decoded with ONE language
+    # forced, so one that straddles a switch would force the wrong language on half of itself
+    switches = sorted((x.end + y.start) / 2 for x, y in zip(spans, spans[1:]) if x.lang and y.lang and x.lang != y.lang)
     chunks: list[Span] = []
     for a, b in active:
         if b - a < 0.5:
             continue
-        while b - a > max_len:
-            c = cut_point(a, b)
-            chunks.append(Span(a, c))
-            a = c
-        chunks.append(Span(a, b))
+        pieces: list[tuple[float, float]] = []
+        cur_a = a
+        for sw in switches:
+            if cur_a + 0.3 < sw < b - 0.3:
+                pieces.append((cur_a, sw))
+                cur_a = sw
+        pieces.append((cur_a, b))
+        for a2, b2 in pieces:
+            while b2 - a2 > max_len:
+                c = cut_point(a2, b2)
+                chunks.append(Span(a2, c))
+                a2 = c
+            chunks.append(Span(a2, b2))
     out: list[Span] = []
     for c in chunks:
         s, e = max(0.0, c.start - pad), min(total_dur, c.end + pad)

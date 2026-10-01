@@ -181,10 +181,13 @@ def lexical(text: str) -> bool:
     return len(core) >= 4
 
 
-def decide(w_lang: str | None, w_prob: float, q_lang: str | None, text: str) -> tuple[str | None, float, float]:
+def decide(w_lang: str | None, w_prob: float, q_lang: str | None, text: str,
+           prior: tuple[str, float] | None = None) -> tuple[str | None, float, float]:
     """Combine the votes: (language, score, margin). Confident when the score reaches LID_CONFIDENT_SCORE and beats
     the runner-up by LID_CONFIDENT_MARGIN. Without lexical content in Qwen's decode, Qwen's vote is nearly worthless
-    and the script says nothing — only a very sure whisper can carry the window then."""
+    and the script says nothing — only a very sure whisper can carry the window then. `prior` (language, weight)
+    is what this window's speaker has spoken elsewhere — evidence, added to that language's score, never a
+    verdict."""
     scores: dict[str, float] = {}
     if w_lang:
         scores[w_lang] = scores.get(w_lang, 0.0) + max(0.0, min(1.0, w_prob))
@@ -194,6 +197,8 @@ def decide(w_lang: str | None, w_prob: float, q_lang: str | None, text: str) -> 
     s_lang, s_w = script_vote(text) if words else (None, 0.0)
     if s_lang:
         scores[s_lang] = scores.get(s_lang, 0.0) + s_w
+    if prior and prior[0]:
+        scores[prior[0]] = scores.get(prior[0], 0.0) + prior[1]
     if not scores:
         return None, 0.0, 0.0
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
@@ -219,12 +224,14 @@ class Window:
     margin: float = 0.0
     confident: bool = False
     judged: bool = False
+    speaker: str = ""                      # the one voice in this window (speaker-aware windows, 0.4.4); "" = unknown
+    prior: str | None = None               # the speaker prior that settled an uncertain window, if one did
 
     def to_dict(self) -> dict:
         return {"start": round(self.start, 2), "end": round(self.end, 2), "speech": round(self.speech, 1),
                 "whisper": [self.whisper[0], round(self.whisper[1], 3)], "qwen": [self.qwen[0], self.qwen[1][:60]],
                 "lang": self.lang, "score": self.score, "margin": self.margin, "confident": self.confident,
-                "judged": self.judged}
+                "judged": self.judged, "speaker": self.speaker, "prior": self.prior}
 
 
 @dataclass
@@ -256,38 +263,97 @@ class LidResult:
         return {"version": self.version, "dominant": self.dominant, "forced": self.forced,
                 "seconds": {k: round(v, 1) for k, v in self.seconds.items()},
                 "confident_windows": self.confident_windows, "uncertain_windows": self.uncertain_windows,
-                "spans": [[round(s.start, 3), round(s.end, 3), s.lang] for s in self.spans],
+                "spans": [[round(s.start, 3), round(s.end, 3), s.lang, s.speaker] for s in self.spans],
                 "windows": [w.to_dict() for w in self.windows], "notes": self.notes, "summary": self.summary()}
 
     @staticmethod
     def from_dict(d: dict) -> "LidResult":
-        spans = [Span(float(a), float(b), lang) for a, b, lang in d.get("spans", [])]
+        spans = [Span(float(x[0]), float(x[1]), x[2], x[3] if len(x) > 3 else "") for x in d.get("spans", [])]
         wins = [Window(w["start"], w["end"], w["speech"], [], (w["whisper"][0], w["whisper"][1]),
                        (w["qwen"][0], w["qwen"][1]), w["lang"], w["score"], w["margin"], w["confident"],
-                       w.get("judged", True)) for w in d.get("windows", [])]
+                       w.get("judged", True), w.get("speaker", ""), w.get("prior")) for w in d.get("windows", [])]
         return LidResult(d["version"], wins, spans, d.get("dominant"), d.get("seconds", {}),
                          d.get("confident_windows", 0), d.get("uncertain_windows", 0), d.get("forced", False),
                          d.get("notes", []))
 
 
+def split_at_turns(spans: list[Span], turns, min_piece: float = 0.4) -> list[Span]:
+    """Cut the VAD spans at speaker changes so no span holds two voices, and give each piece its speaker (the
+    turn that covers most of it). Boundaries closer than `min_piece` to a span's edge are not cut. Spans the
+    diarizer saw nobody in keep speaker "" (0.4.4)."""
+    if not turns:
+        return spans
+    starts = np.array([t.start for t in turns])
+    ends = np.array([t.end for t in turns])
+    labels = [t.speaker for t in turns]
+    edges = sorted({float(x) for x in np.concatenate([starts, ends])})
+
+    def who(a: float, b: float) -> str:
+        ov = np.minimum(ends, b) - np.maximum(starts, a)
+        k = int(ov.argmax())
+        return labels[k] if ov[k] > 0 else ""
+
+    out: list[Span] = []
+    for s in spans:
+        cuts = [e for e in edges if s.start + min_piece < e < s.end - min_piece]
+        a = s.start
+        for c in cuts + [s.end]:
+            if c - a >= min_piece or c == s.end:
+                out.append(Span(a, c, s.lang, who(a, c)))
+                a = c
+    return out
+
+
 def build_windows(spans: list[Span], min_speech: float = config.LID_WINDOW_SPEECH_SEC,
-                  max_audio: float = config.LID_WINDOW_MAX_AUDIO_SEC) -> list[Window]:
+                  max_audio: float = config.LID_WINDOW_MAX_AUDIO_SEC, by_speaker: bool = False) -> list[Window]:
     """Consecutive spans until `min_speech` seconds of speech (or `max_audio` seconds of audio) — every span belongs
-    to exactly one window."""
+    to exactly one window. With `by_speaker`, a change of voice closes the window too, so a window is one speaker:
+    the natural unit of one language (0.4.4)."""
     out: list[Window] = []
     cur: list[int] = []
     speech = 0.0
+
+    def close() -> None:
+        out.append(Window(spans[cur[0]].start, spans[cur[-1]].end, speech, cur, speaker=spans[cur[0]].speaker))
+
     for i, s in enumerate(spans):
-        if cur and (speech >= min_speech or s.end - spans[cur[0]].start > max_audio):
-            out.append(Window(spans[cur[0]].start, spans[cur[-1]].end, speech, cur))
+        if cur and (speech >= min_speech or s.end - spans[cur[0]].start > max_audio
+                    or (by_speaker and s.speaker != spans[cur[0]].speaker)):
+            close()
             cur, speech = [], 0.0
         cur.append(i)
         speech += s.dur
     if cur:
-        if out and speech < min_speech / 3:          # a tiny tail joins the previous window
+        same = not by_speaker or (out and spans[cur[0]].speaker == out[-1].speaker)
+        if out and speech < min_speech / 3 and same:          # a tiny tail joins the previous window
             out[-1].spans += cur; out[-1].end = spans[cur[-1]].end; out[-1].speech += speech
         else:
-            out.append(Window(spans[cur[0]].start, spans[cur[-1]].end, speech, cur))
+            close()
+    return out
+
+
+def speaker_priors(windows: list[Window]) -> dict[str, tuple[str, float]]:
+    """What each voice has spoken so far, as evidence for its uncertain windows: speech-weighted shares of the
+    languages of its confident windows → (language, weight). One language at ≥ 90 % earns a strong prior
+    (LID_PRIOR_STRONG), ≥ 65 % a weak one (LID_PRIOR_WEAK), anything more mixed no prior at all — a bilingual
+    speaker is learnt as one, never locked to one language. The prior only ever adds to a score; a confident
+    window is never touched by it (0.4.4)."""
+    tally: dict[str, dict[str, float]] = {}
+    for w in windows:
+        if w.speaker and w.confident and w.lang:
+            d = tally.setdefault(w.speaker, {})
+            d[w.lang] = d.get(w.lang, 0.0) + w.speech
+    out: dict[str, tuple[str, float]] = {}
+    for spk, langs in tally.items():
+        total = sum(langs.values())
+        lang, sec = max(langs.items(), key=lambda kv: kv[1])
+        if total < config.LID_PRIOR_MIN_SPEECH:
+            continue
+        share = sec / total
+        if share >= 0.9:
+            out[spk] = (lang, config.LID_PRIOR_STRONG)
+        elif share >= 0.65:
+            out[spk] = (lang, config.LID_PRIOR_WEAK)
     return out
 
 
@@ -314,7 +380,7 @@ def sample_indices(n: int, k: int) -> list[int]:
 
 
 def smooth(langs: list[str | None], confident: list[bool], min_run: int = config.LID_SWITCH_MIN_WINDOWS,
-           margins: list[float] | None = None) -> list[str | None]:
+           margins: list[float] | None = None, speakers: list[str] | None = None) -> list[str | None]:
     """Uncertain windows inherit the nearest confident neighbour; a confident run shorter than `min_run` of a language
     other than the dominant one is absorbed (it is a stray phrase, not a scene) — unless every window of the run
     is strongly evidenced (margin ≥ LID_STRONG_MARGIN: both detectors agreeing on real words). A strongly evidenced
@@ -342,48 +408,88 @@ def smooth(langs: list[str | None], confident: list[bool], min_run: int = config
             i = j
         else:
             i += 1
-    # uncertain windows: nearest confident neighbour (ties → the earlier one)
+    # uncertain windows: the nearest confident window of the SAME voice when one is close (speaker continuity,
+    # 0.4.4), else the nearest confident neighbour (ties → the earlier one)
     anchors = [i for i in range(n) if confident[i] and out[i]]
     for i in range(n):
         if not (confident[i] and out[i]):
-            nearest = min(anchors, key=lambda a: (abs(a - i), a))
+            nearest = None
+            if speakers and speakers[i]:
+                same = [a for a in anchors if speakers[a] == speakers[i] and abs(a - i) <= config.LID_SAME_SPEAKER_REACH]
+                if same:
+                    nearest = min(same, key=lambda a: (abs(a - i), a))
+            if nearest is None:
+                nearest = min(anchors, key=lambda a: (abs(a - i), a))
             out[i] = out[nearest]
     return out
 
 
 def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool = False,
-             sample: int = config.LID_SAMPLE_WINDOWS) -> LidResult:
-    """Label every span. `engines` provides `.whisper` (may be None) and `.qwen`, each with identify(piece)."""
-    windows = build_windows(spans)
+             sample: int = config.LID_SAMPLE_WINDOWS, turns=None) -> LidResult:
+    """Label every span. `engines` provides `.whisper` (may be None) and `.qwen`, each with identify(piece).
+    With `turns` (speaker diarization, 0.4.4) the spans are cut at speaker changes, a window never holds two
+    voices, every voice gets sampled, and each voice's language history is evidence for its uncertain windows."""
+    by_speaker = bool(turns)
+    if by_speaker:
+        spans = split_at_turns(spans, turns)
+    windows = build_windows(spans, by_speaker=by_speaker)
     if not windows:
         return LidResult(config.LID_VERSION, [], spans, None, {}, 0, 0, notes=["no speech"])
 
-    def judge(w: Window) -> None:
-        piece = splice(audio, [spans[i] for i in w.spans])
-        wl, wp = (None, 0.0)
-        ql, qt = (None, "")
-        wh = engines.whisper
-        if wh is not None:
-            wl, wp = wh.identify(piece)
-        if not whisper_only:
-            ql, qt = engines.qwen.identify(piece)
-        w.whisper, w.qwen = (wl, wp), (ql, qt)
-        w.lang, w.score, w.margin = decide(wl, wp, ql, qt)
+    def judge(w: Window, prior: tuple[str, float] | None = None) -> None:
+        if not w.judged:
+            piece = splice(audio, [spans[i] for i in w.spans])
+            wl, wp = (None, 0.0)
+            ql, qt = (None, "")
+            wh = engines.whisper
+            if wh is not None:
+                wl, wp = wh.identify(piece)
+            if not whisper_only:
+                ql, qt = engines.qwen.identify(piece)
+            w.whisper, w.qwen = (wl, wp), (ql, qt)
+        w.lang, w.score, w.margin = decide(w.whisper[0], w.whisper[1], w.qwen[0], w.qwen[1], prior)
         w.confident = is_confident(w.score, w.margin)
         w.judged = True
 
-    picked = sample_indices(len(windows), sample)
+    picked = set(sample_indices(len(windows), sample))
+    if by_speaker:
+        # every voice gets looked at: its LID_SPEAKER_SAMPLES windows with the most speech, however little it says
+        per: dict[str, list[int]] = {}
+        for i, w in enumerate(windows):
+            if w.speaker:
+                per.setdefault(w.speaker, []).append(i)
+        for spk, idx in per.items():
+            idx.sort(key=lambda i: -windows[i].speech)
+            picked.update(idx[:config.LID_SPEAKER_SAMPLES])
+    picked = sorted(picked)
     for i in picked:
         judge(windows[i])
     langs_seen = {windows[i].lang for i in picked if windows[i].confident and windows[i].lang}
     notes = []
+    if by_speaker:
+        notes.append(f"{len({w.speaker for w in windows if w.speaker})} voices, windows cut at speaker turns")
     if len(langs_seen) > 1 and len(picked) < len(windows):
         notes.append(f"{len(langs_seen)} languages in the {len(picked)}-window sample — judging all {len(windows)}")
         for w in windows:
             if not w.judged:
                 judge(w)
     judged = [w for w in windows if w.judged]
-    labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged])
+    if by_speaker:
+        # the speaker prior: a voice's language history settles its uncertain windows — never its confident ones
+        priors = speaker_priors(judged)
+        settled = 0
+        for w in judged:
+            if not w.confident and w.speaker in priors:
+                judge(w, priors[w.speaker])
+                if w.confident:
+                    w.prior = priors[w.speaker][0]
+                    settled += 1
+        if priors:
+            mixed = sum(1 for w in judged if w.speaker and w.speaker not in priors)
+            notes.append(f"speaker priors for {len(priors)} voice(s) settled {settled} uncertain window(s)"
+                         + (f"; {mixed} window(s) of voices with no single language" if mixed else ""))
+    labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged],
+                    speakers=[w.speaker for w in judged] if by_speaker else None)
     # every window gets a label: unjudged ones (monolingual sample) take the nearest judged neighbour's
     label_at = {id(w): l for w, l in zip(judged, labels)}
     final: list[str | None] = []

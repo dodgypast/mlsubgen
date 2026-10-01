@@ -275,7 +275,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     from .audio import extract_wav, load_wav
     from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, missing_targets, speakers_cached,
                            speakers_wanted, srt_path_for, stage_asr, stage_audio, stage_cues, stage_lid, stage_merge,
-                           stage_speakers, stage_subs, stage_translate)
+                           stage_speakers, stage_subs, stage_translate, usable_turns)
     from .probe import probe
     from .segment import Cue
     from .subs import code_for_tag, pick, plan_sources
@@ -489,10 +489,17 @@ def cmd_run(a: argparse.Namespace) -> int:
                     if not spans or speech < config.LID_MIN_SPEECH_SEC:
                         skip(job, "no speech at all" if not spans else f"only {speech:.0f}s of speech in the whole file"); continue
                     audio = None
+                    turns = []
+                    if speakers_wanted(job):                      # speakers (0.4.0): CPU, before the detector (0.4.4)
+                        if need_spk:
+                            audio = load_wav(job.wav)
+                        stage_speakers(job, data, audio)
+                        turns = usable_turns(data)
                     if not cached:
-                        audio = load_wav(job.wav)
+                        if audio is None:
+                            audio = load_wav(job.wav)
                         try:
-                            res = stage_lid(job, data, audio, spans, engines)
+                            res = stage_lid(job, data, audio, spans, engines, turns=turns)
                             check_source(res)
                         except NotSupported as e:
                             skip(job, str(e)); continue
@@ -506,10 +513,6 @@ def cmd_run(a: argparse.Namespace) -> int:
                     else:
                         words = words_from_dicts(data["asr"][akey]["words"])
                         _log(f"[asr] cached ({akey})")
-                    if need_spk:                                  # speakers (0.4.0): CPU, on the wav we already have
-                        if audio is None:
-                            audio = load_wav(job.wav)
-                        stage_speakers(job, data, audio)
                     keys[job.video] = cue_key_for(job, akey)      # cues (and translations) are a separate set with speakers on
                     if data["asr"][akey].get("merge") == "pending":
                         pending.append((job, akey, spans))       # cues after the merge; the wav stays for the energy gate
@@ -823,7 +826,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
     from .audio import load_wav
     from .bench import align_reference, chrf, write_html
     from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, speakers_cached, speakers_wanted,
-                           stage_asr, stage_audio, stage_cues, stage_lid, stage_merge, stage_speakers, stage_translate)
+                           stage_asr, stage_audio, stage_cues, stage_lid, stage_merge, stage_speakers, stage_translate,
+                           usable_turns)
     from .segment import Cue
     from .srt import read_srt
     from .translate import ClientPool
@@ -851,21 +855,24 @@ def cmd_bench(a: argparse.Namespace) -> int:
         asr_cached = bool((data.get("asr") or {}).get(key))
         need_spk = speakers_wanted(job) and not speakers_cached(job, data)
         pr, spans = stage_audio(job, data, need_wav=not asr_cached or need_spk)
+        turns = []
+        if speakers_wanted(job):                              # before the detector (0.4.4)
+            if need_spk:
+                audio = load_wav(job.wav)
+            stage_speakers(job, data, audio)
+            turns = usable_turns(data)
         if asr_cached:
             from .asr import words_from_dicts
             words = words_from_dicts(data["asr"][key]["words"]); _log(f"[asr] cached ({key})")
         else:
-            audio = load_wav(job.wav)
+            if audio is None:
+                audio = load_wav(job.wav)
             try:
-                res = stage_lid(job, data, audio, spans, engines)
+                res = stage_lid(job, data, audio, spans, engines, turns=turns)
                 check_source(res)
             except NotSupported as e:
                 _log(f"[lid] {e}"); return 1
             words = stage_asr(job, data, engines, audio, cover_chunks(audio, res.spans, len(audio) / 16000.0, dominant=res.dominant), a.asr)
-        if need_spk:
-            if audio is None:
-                audio = load_wav(job.wav)
-            stage_speakers(job, data, audio)
     finally:
         engines.close()
     if (data.get("asr") or {}).get(key, {}).get("merge") == "pending":
@@ -1117,7 +1124,7 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
     and after a change on the same film (2026-10-01; the measurement for the speaker-aware detector)."""
     from .asr import Engines
     from .audio import load_wav
-    from .pipeline import Job, stage_audio, stage_lid
+    from .pipeline import Job, speakers_wanted, stage_audio, stage_lid, stage_speakers, usable_turns
     from .probe import describe_tracks, probe
     from .srt import read_srt
     from .subs import extract_track
@@ -1167,10 +1174,17 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
               speaker_threshold=getattr(a, "speaker_threshold", None))
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
+    check_speakers(a)
     try:
         _, spans = stage_audio(job, data, need_wav=True)
         audio = load_wav(job.wav)
-        res = stage_lid(job, data, audio, spans, engines)
+        turns = []
+        if speakers_wanted(job):
+            stage_speakers(job, data, audio)
+            turns = usable_turns(data)
+            if not turns:
+                _log("[lidbench] speakers requested but the diarization failed the gate — scoring the plain detector")
+        res = stage_lid(job, data, audio, spans, engines, turns=turns)
     finally:
         engines.close()
     dominant = res.dominant or "?"
@@ -1499,6 +1513,31 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     _win = [lid.Window(0.0, 6.0, 6.0, [0, 1, 2]), lid.Window(6.0, 12.0, 6.0, [3, 4, 5])]
     assert lid.refine_boundaries(_aud, _sp, _win, ["en", "fr"], _FakeWhisper()) == 1
     assert [s.lang for s in _sp] == ["en", "en", "en", "en", "fr", "fr"], [s.lang for s in _sp]
+    # speaker-aware detection (0.4.4): spans cut at turns, a window is one voice, priors from a voice's history,
+    # a prior adds evidence but never flips a confident window, an uncertain window follows its own voice
+    from .speakers import Turn as _Turn
+    pieces = lid.split_at_turns([Span(0.0, 10.0)], [_Turn(0.0, 4.0, "S1"), _Turn(4.0, 10.0, "S2")])
+    assert [(p.start, p.end, p.speaker) for p in pieces] == [(0.0, 4.0, "S1"), (4.0, 10.0, "S2")], pieces
+    assert lid.split_at_turns([Span(0.0, 10.0)], [_Turn(0.0, 9.9, "S1"), _Turn(9.9, 10.0, "S2")])[0].end == 10.0, "a cut too near the edge is not made"
+    sp3 = [Span(0.0, 3.0, speaker="S1"), Span(3.5, 6.5, speaker="S1"), Span(7.0, 10.0, speaker="S2")]
+    assert [w.speaker for w in lid.build_windows(sp3, by_speaker=True)] == ["S1", "S2"], "a change of voice closes the window"
+    assert len(lid.build_windows(sp3)) == 1, "without speakers the three spans are one window"
+    wins = [lid.Window(0, 1, 20.0, [], lang="ja", confident=True, speaker="S1"),
+            lid.Window(0, 1, 6.0, [], lang="ja", confident=True, speaker="S2"), lid.Window(0, 1, 4.0, [], lang="en", confident=True, speaker="S2"),
+            lid.Window(0, 1, 7.0, [], lang="en", confident=True, speaker="S3"), lid.Window(0, 1, 2.0, [], lang="ja", confident=True, speaker="S3"),
+            lid.Window(0, 1, 30.0, [], lang="de", confident=False, speaker="S4")]
+    pri = lid.speaker_priors(wins)
+    assert pri == {"S1": ("ja", config.LID_PRIOR_STRONG), "S3": ("en", config.LID_PRIOR_WEAK)}, pri   # S2 bilingual: none; S4 never confident
+    assert lid.decide("ja", 0.55, "ja", "ん", prior=("ja", 0.5))[0] == "ja" and lid.is_confident(*lid.decide("ja", 0.55, "ja", "ん", prior=("ja", 0.5))[1:])
+    assert not lid.is_confident(*lid.decide("ja", 0.55, "ja", "ん")[1:]), "the same window without the prior stays uncertain"
+    assert lid.decide("en", 0.9, "en", "the cat and the dog with you", prior=("ja", 0.5))[0] == "en", "a prior never flips strong evidence"
+    assert lid.smooth(["ja", "en", None, "en"], [True, True, False, True], margins=[0.9] * 4, speakers=["S1", "S2", "S1", "S2"]) \
+        == ["ja", "en", "ja", "en"], "an uncertain window follows its own voice"
+    assert lid.smooth(["ja", "en", None, "en"], [True, True, False, True], margins=[0.9] * 4) == ["ja", "en", "en", "en"], "without speakers: the nearest neighbour"
+    from .vad import cover_chunks as _cover
+    _a2 = np.concatenate([np.full(2 * _SR, 0.01, dtype=np.float32), np.full(18 * _SR, 0.5, dtype=np.float32)])
+    ch2 = _cover(_a2, [Span(2.0, 10.0, "en"), Span(10.0, 20.0, "de")], 20.0, max_len=30.0)
+    assert [c.lang for c in ch2] == ["en", "de"] and abs(ch2[0].end - 10.0) < 0.3, "a language change cuts a chunk"
     ch = _mk([Span(0, 10, "ja"), Span(12, 20, "ja"), Span(21, 22, "ja"), Span(30, 60, "ja"), Span(61, 70, "en"), Span(200, 201, "en"),
               Span(240, 260, "en")], 300.0, max_len=240, break_silence=6, pad=0)
     assert [(c.start, c.end, c.lang) for c in ch] == [(0, 22, "ja"), (30, 60, "ja"), (61, 70, "en"), (200, 201, "en"), (240, 260, "en")], ch

@@ -209,6 +209,12 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
   several similar voices over a music bed is the hard case, so the labels are passed to the translator as hints
   and never written out. `mlsubgen bench VIDEO --speakers auto` against the same clip without them shows what it
   does for your material.
+- With `--speakers`, the language detector is speaker-aware (0.4.4): the diarization runs first, speech is cut
+  at speaker changes so a detection window never holds two voices, every voice gets sampled, and a voice's
+  language history is evidence for its uncertain windows — never for its confident ones, so a character who
+  switches language mid-scene is still followed, and a bilingual voice is learnt as bilingual rather than locked
+  to one language. `mlsubgen lidbench VIDEO --speakers auto` against the plain run measures it on a film with a
+  forced subtitle track.
 
 ## Support and provenance
 
