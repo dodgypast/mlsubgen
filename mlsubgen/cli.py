@@ -1132,7 +1132,8 @@ def main(argv: list[str] | None = None) -> int:
                                  "`mlsubgen help` for the guide, `mlsubgen help COMMAND` for a command's options",
                                  usage="mlsubgen [run] [PATH ...] [options]  |  mlsubgen COMMAND [arguments]")
     ap.add_argument("--version", action="version", version=f"mlsubgen {__version__}")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # prog= stops argparse prefixing every command's usage line with the top-level usage string
+    sub = ap.add_subparsers(dest="cmd", required=True, prog="mlsubgen")
 
     r = sub.add_parser("run", help="subtitle every video in the given files/folders: one <video>.<lang>.srt per target language")
     r.add_argument("paths", nargs="*", help="files or folders (default: the current folder)")
