@@ -305,13 +305,15 @@ def split_at_turns(spans: list[Span], turns, min_piece: float = 0.4) -> list[Spa
 
 
 def build_windows(spans: list[Span], min_speech: float = config.LID_WINDOW_SPEECH_SEC,
-                  max_audio: float = config.LID_WINDOW_MAX_AUDIO_SEC, by_speaker: bool = False) -> list[Window]:
+                  max_audio: float = config.LID_WINDOW_MAX_AUDIO_SEC, by_speaker: bool = False,
+                  voice_min_speech: float | None = None) -> list[Window]:
     """Consecutive spans until `min_speech` seconds of speech (or `max_audio` seconds of audio) — every span belongs
     to exactly one window. With `by_speaker`, a change of voice closes the window too, so a window is one speaker:
     the natural unit of one language (0.4.4)."""
     out: list[Window] = []
     cur: list[int] = []
     speech = 0.0
+    voice_min = config.LID_SPEAKER_WINDOW_MIN_SPEECH if voice_min_speech is None else voice_min_speech
 
     def voice() -> str:
         """The window's speaker: the voice with most speech in it (one voice, normally; a tiny opening piece of
@@ -327,8 +329,7 @@ def build_windows(spans: list[Span], min_speech: float = config.LID_WINDOW_SPEEC
     for i, s in enumerate(spans):
         # a change of voice closes the window — once it holds LID_SPEAKER_WINDOW_MIN_SPEECH of speech: a window of
         # a second or two is too short to judge, and a stream of them invented switches (0.4.5)
-        voice_change = by_speaker and s.speaker != spans[cur[-1]].speaker and speech >= config.LID_SPEAKER_WINDOW_MIN_SPEECH \
-            if cur else False
+        voice_change = by_speaker and s.speaker != spans[cur[-1]].speaker and speech >= voice_min if cur else False
         if cur and (speech >= min_speech or s.end - spans[cur[0]].start > max_audio or voice_change):
             close()
             cur, speech = [], 0.0
@@ -507,9 +508,10 @@ def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool =
             mixed = sum(1 for w in judged if w.speaker and w.speaker not in priors)
             notes.append(f"speaker priors for {len(priors)} voice(s) settled {settled} uncertain window(s)"
                          + (f"; {mixed} window(s) of voices with no single language" if mixed else ""))
+    # the run rule stays window-based with speakers on: the seconds-based variant (0.4.5, kept in smooth() for
+    # experiments) absorbed short TRUE foreign runs and cost 3–13 points of recall on all three test films
     labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged],
-                    speakers=[w.speaker for w in judged] if by_speaker else None,
-                    speech=[w.speech for w in judged] if by_speaker else None)
+                    speakers=[w.speaker for w in judged] if by_speaker else None)
     # every window gets a label: unjudged ones (monolingual sample) take the nearest judged neighbour's
     label_at = {id(w): l for w, l in zip(judged, labels)}
     final: list[str | None] = []

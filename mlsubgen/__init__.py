@@ -14,4 +14,4 @@ queued jobs one at a time, and a reboot only pauses them — every stage is chec
 job resumes where it stopped because the worker hands the run the job's creation time (`--since`).
 """
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"
