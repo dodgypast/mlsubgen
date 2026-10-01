@@ -475,11 +475,16 @@ def stage_cues(job: Job, data: dict, key: str, words: list[Word], spans: list[Sp
         labelled = spk.label_words(words, turns, stats=sstats)
         clusters = len({t.speaker for t in turns})
         ambiguous = sstats.get("ambiguous_words", 0)
-        # the sanity gate: evidence too thin or too muddled is not used at all (the run then behaves as without
-        # --speakers) — one speaker found, or more ambiguous words than SPEAKER_MAX_AMBIGUOUS allows
-        if clusters < config.SPEAKER_MIN_CLUSTERS or (labelled + ambiguous and ambiguous / (labelled + ambiguous) > config.SPEAKER_MAX_AMBIGUOUS):
-            _log(f"[speakers] ⚠ evidence not used: {clusters} cluster(s), {ambiguous} ambiguous of {labelled + ambiguous} "
-                 f"covered words — cues built without speaker labels")
+        # the sanity gate: evidence too thin, too muddled or too fragmented is not used at all (the run then behaves
+        # as without --speakers) — one speaker found; more ambiguous words than SPEAKER_MAX_AMBIGUOUS allows; or
+        # so many clusters that every few turns is "a new voice" (2026-10-01: threshold 0.5 gave 80 speakers for
+        # 185 turns of a ten-minute anime clip and the labels were noise — the gate must catch that, not just 1)
+        fragmented = clusters > max(8, len(turns) * config.SPEAKER_MAX_CLUSTER_RATIO)
+        if clusters < config.SPEAKER_MIN_CLUSTERS or fragmented or \
+                (labelled + ambiguous and ambiguous / (labelled + ambiguous) > config.SPEAKER_MAX_AMBIGUOUS):
+            _log(f"[speakers] ⚠ evidence not used: {clusters} cluster(s) for {len(turns)} turns, {ambiguous} ambiguous of "
+                 f"{labelled + ambiguous} covered words — cues built without speaker labels"
+                 + (" (over-fragmented: raise --speaker-threshold or give --speakers N)" if fragmented else ""))
             for w in words:
                 w.speaker = ""
             labelled = 0

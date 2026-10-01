@@ -177,6 +177,7 @@ COMMANDS
   subtitles   run        (default) subtitle the videos in the given files/folders
               scan       detect the languages only — no ASR, nothing written; one line per file
               bench      compare translators on one video or a clip:  mlsubgen bench VIDEO --clip 0:10:00-0:20:00
+              lidbench   score the language detector on a multilingual film against its forced subtitle track
   models      pull       download models: mlsubgen pull | pull gemma4 | pull some/ollama:tag | pull asr | pull --all
               models     what is ready — translator presets in Ollama, ASR models in the Hugging Face cache
               languages  the {len(config.LANG_NAMES)} subtitle languages: code, name, native name, which engine decodes it
@@ -1001,6 +1002,205 @@ def cmd_models(a: argparse.Namespace) -> int:
     return 0
 
 
+def _merge_intervals(items: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for s, e in sorted(items):
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def _overlap(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> float:
+    total = 0.0
+    j = 0
+    for s, e in a:
+        while j < len(b) and b[j][1] < s:
+            j += 1
+        k = j
+        while k < len(b) and b[k][0] < e:
+            total += max(0.0, min(e, b[k][1]) - max(s, b[k][0]))
+            k += 1
+    return total
+
+
+def _intersect(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The parts of the merged intervals `a` that lie inside the merged intervals `b`."""
+    out = []
+    for s, e in a:
+        for bs, be in b:
+            if be <= s:
+                continue
+            if bs >= e:
+                break
+            out.append((max(s, bs), min(e, be)))
+    return out
+
+
+def _merge_gap(items: list[tuple[float, float]], gap: float) -> list[tuple[float, float]]:
+    """Merge intervals separated by less than `gap` seconds: the blocks of one foreign-language conversation,
+    whose cues have pauses between them."""
+    out: list[tuple[float, float]] = []
+    for s, e in sorted(items):
+        if out and s - out[-1][1] < gap:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def _switches(truth_blocks: list[tuple[float, float]], our_blocks: list[tuple[float, float]],
+              tol: float = 3.0, far: float = 5.0) -> dict:
+    """Language changes: every block edge is a switch (into the foreign language at its start, back at its end).
+    Recall = reference switches we reproduced within `tol` seconds; latency = how far off; false = our switches
+    with no reference switch within `far` seconds."""
+    rec = {"reference_switches": 2 * len(truth_blocks), "detected": 0, "latencies": [], "false": 0}
+    for side in (0, 1):
+        t_edges = [b[side] for b in truth_blocks]
+        o_edges = [b[side] for b in our_blocks]
+        for t in t_edges:
+            d = min((abs(o - t) for o in o_edges), default=None)
+            if d is not None and d <= tol:
+                rec["detected"] += 1
+                rec["latencies"].append(round(d, 2))
+        rec["false"] += sum(1 for o in o_edges if not any(abs(o - t) <= far for t in t_edges))
+    lat = sorted(rec["latencies"])
+    rec["median_latency"] = lat[len(lat) // 2] if lat else None
+    rec["switch_recall"] = rec["detected"] / rec["reference_switches"] if rec["reference_switches"] else 0.0
+    return rec
+
+
+def cmd_lidbench(a: argparse.Namespace) -> int:
+    """How well does the language detector find the foreign-language stretches of a multilingual film? The ground
+    truth is the release's FORCED subtitle track — subtitles only where a language other than the main one is
+    spoken — whose cue intervals mean "foreign speech here". Reports recall (how much of that time we labelled as
+    not the dominant language), precision (how much of our foreign-labelled time lies inside it), the languages we
+    found, and the biggest misses and false alarms with their timestamps, so the detector can be compared before
+    and after a change on the same film (2026-10-01; the measurement for the speaker-aware detector)."""
+    from .asr import Engines
+    from .audio import load_wav
+    from .pipeline import Job, stage_audio, stage_lid
+    from .probe import describe_tracks, probe
+    from .srt import read_srt
+    from .subs import extract_track
+
+    video = Path(a.video).expanduser()
+    if not video.is_file():
+        _log(f"not found: {video}"); return 1
+    if a.profile:
+        config.apply_profile(a.profile)
+    clip = clip_arg(a.clip)
+    pr = probe(video, a.audio_track)
+    if a.reference:
+        ref = read_srt(Path(a.reference).expanduser())
+        where = Path(a.reference).name
+    else:
+        tracks = [t for t in pr.subs if t.is_text]
+        if a.forced_track is not None:
+            tracks = [t for t in tracks if t.index == a.forced_track]
+        else:
+            tracks = [t for t in tracks if getattr(t, "forced", False) or "forced" in (t.title or "").lower()]
+        if not tracks:
+            _log("no forced subtitle track found — pass --forced-track N (see `mlsubgen tracks`) or --reference forced.srt")
+            _log(describe_tracks(pr)); return 1
+        t = tracks[0]
+        tmp = config.TMP_DIR / f"{video.stem[:60]}.forced.srt"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        n = extract_track(video, t.index, tmp, t.codec)
+        ref = read_srt(tmp)
+        where = f"s:{t.index} {t.codec}{', ' + t.title if t.title else ''} ({n} raw cues)"
+    if clip:
+        ref = [c for c in ref if c.end > clip[0] and c.start < clip[1]]
+        for c in ref:
+            c.start -= clip[0]; c.end -= clip[0]
+    if not ref:
+        _log("the reference has no cues (in the clip)"); return 1
+    _log(f"[lidbench] ground truth: {where}, {len(ref)} cues, {sum(c.end - c.start for c in ref) / 60:.1f} min of foreign speech")
+
+    job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, a.context or "", None, a.genre,
+              a.window, ["en"], a.source, speakers=getattr(a, "speakers", "off") or "off",
+              speaker_threshold=getattr(a, "speaker_threshold", None))
+    data = work.load(job.work_file)
+    engines = Engines(a.asr_model, a.whisper_model)
+    try:
+        _, spans = stage_audio(job, data, need_wav=True)
+        audio = load_wav(job.wav)
+        res = stage_lid(job, data, audio, spans, engines)
+    finally:
+        engines.close()
+    dominant = res.dominant or "?"
+    speech = _merge_intervals([(s.start, s.end) for s in res.spans])
+    truth_raw = _merge_intervals([(c.start, c.end) for c in ref])
+    # forced subtitles also cover signed dialogue and on-screen text, where nothing is spoken: only the part of the
+    # reference that overlaps detected speech can be asked of an acoustic detector
+    truth = _merge_intervals(_intersect(truth_raw, speech))
+    ours_by_lang: dict[str, float] = {}
+    foreign = []
+    for s in res.spans:
+        lang = s.lang or dominant
+        ours_by_lang[lang] = ours_by_lang.get(lang, 0.0) + s.dur
+        if lang != dominant:
+            foreign.append((s.start, s.end))
+    ours = _merge_intervals(foreign)
+    t_raw = sum(e - s for s, e in truth_raw)
+    t_truth = sum(e - s for s, e in truth)
+    t_ours = sum(e - s for s, e in ours)
+    hit = _overlap(truth, ours)
+    recall = hit / t_truth if t_truth else 0.0
+    precision = hit / t_ours if t_ours else 0.0
+    # language changes: blocks of foreign dialogue (cues less than 5 s apart) that contain speech, against ours
+    truth_blocks = [b for b in _merge_gap(truth_raw, 5.0) if _overlap([b], speech) > 0.5]
+    our_blocks = _merge_gap(foreign, 5.0)
+    sw = _switches(truth_blocks, our_blocks)
+    langs = ", ".join(f"{config.LANG_NAMES.get(k, k)} {v / 60:.1f}m" for k, v in sorted(ours_by_lang.items(), key=lambda kv: -kv[1]))
+    print(f"\nlidbench  {video.name}" + (f"  clip {a.clip}" if clip else ""))
+    print(f"  dominant language: {config.LANG_NAMES.get(dominant, dominant)}   detector v{config.LID_VERSION}"
+          + (f"   speakers {job.speakers}" if job.speakers != "off" else ""))
+    print(f"  foreign speech in the forced track: {t_truth / 60:.1f} min"
+          + (f" (of {t_raw / 60:.1f} min of forced subtitles; the rest has no detected speech — signed or on-screen text)" if t_raw - t_truth > 10 else "")
+          + f"   labelled foreign by us: {t_ours / 60:.1f} min   both: {hit / 60:.1f} min")
+    print(f"  recall {recall:.0%}   precision {precision:.0%}   (by duration)")
+    print(f"  switches: {sw['reference_switches']} language changes in the reference ({len(truth_blocks)} foreign blocks); "
+          f"detected {sw['switch_recall']:.0%} within 3 s"
+          + (f", median latency {sw['median_latency']:.1f} s" if sw["median_latency"] is not None else "")
+          + f"; {sw['false']} switches we invented (no reference change within 5 s)")
+    print(f"  languages found: {langs}")
+    misses = [(s, e, (e - s) - _overlap([(s, e)], ours)) for s, e in truth]
+    misses = sorted([m for m in misses if m[2] > 3.0], key=lambda m: -m[2])[:a.show]
+    if misses:
+        print("  biggest misses (forced subtitles there, we called it the main language):")
+        for s, e, gap in misses:
+            print(f"    {_hms(s)}–{_hms(e)}  {gap:.0f}s missed of {e - s:.0f}s")
+    alarms = [(s, e, (e - s) - _overlap([(s, e)], truth)) for s, e in ours]
+    alarms = sorted([x for x in alarms if x[2] > 3.0], key=lambda x: -x[2])[:a.show]
+    if alarms:
+        print("  biggest false alarms (we called it foreign, no forced subtitles there):")
+        for s, e, extra in alarms:
+            label = {sp.lang for sp in res.spans if sp.start < e and sp.end > s and sp.lang and sp.lang != dominant}
+            print(f"    {_hms(s)}–{_hms(e)}  {extra:.0f}s of {e - s:.0f}s  as {', '.join(sorted(label)) or '?'}")
+    out_dir = Path(a.out_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    import json
+    rec = {"video": str(video), "clip": a.clip, "lid_version": config.LID_VERSION, "speakers": job.speakers,
+           "dominant": dominant, "truth_sec": round(t_truth, 1), "truth_raw_sec": round(t_raw, 1),
+           "ours_sec": round(t_ours, 1), "hit_sec": round(hit, 1),
+           "recall": round(recall, 3), "precision": round(precision, 3),
+           "switches": {k: v for k, v in sw.items() if k != "latencies"}, "foreign_blocks": len(truth_blocks),
+           "languages_sec": {k: round(v, 1) for k, v in ours_by_lang.items()},
+           "misses": [[round(s, 1), round(e, 1), round(g, 1)] for s, e, g in misses],
+           "false_alarms": [[round(s, 1), round(e, 1), round(x, 1)] for s, e, x in alarms]}
+    tag = video.stem[:80] + (f".{int(clip[0])}-{int(clip[1])}" if clip else "") + (f".spk-{job.speakers}" if job.speakers != "off" else "")
+    (out_dir / f"{tag}.lidbench.json").write_text(json.dumps(rec, indent=1, ensure_ascii=False), encoding="utf-8")
+    print(f"  → {out_dir / (tag + '.lidbench.json')}")
+    return 0
+
+
+def _hms(t: float) -> str:
+    t = max(0.0, t)
+    return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}"
+
+
 def cmd_config(a: argparse.Namespace) -> int:
     """`mlsubgen config` shows the settings that matter and where each comes from; `mlsubgen config targets en,th`
     saves the default subtitle languages (the web form's "make these the default" does the same); `--clear` forgets
@@ -1305,6 +1505,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         assert _spk.build_config(0, 0.5) is not None and _spk.build_config(4, None) is not None
     assert _models.resolve("speakers") and all(k == "url" for _, k, _ in _models.resolve("speakers"))
     assert "speakers" in _models.status("http://127.0.0.1:1") and len(_models.status("http://127.0.0.1:1")["speakers"]) == 2
+    # lidbench interval arithmetic (2026-10-01): merging, overlap, intersection with speech, conversation blocks,
+    # and the switch metrics — a reference change we reproduce within 3 s counts, one we invent is false
+    assert _merge_intervals([(5, 8), (0, 3), (2, 4)]) == [(0, 4), (5, 8)]
+    assert abs(_overlap([(0, 4), (5, 8)], [(2, 6)]) - 3.0) < 1e-9 and _overlap([(0, 1)], [(2, 3)]) == 0.0
+    assert _intersect([(0, 10)], [(2, 4), (8, 12)]) == [(2, 4), (8, 10)] and _intersect([(0, 1)], [(5, 6)]) == []
+    assert _merge_gap([(0, 2), (3, 5), (20, 22)], 5.0) == [(0, 5), (20, 22)]
+    sw_ = _switches([(10, 20), (50, 60)], [(11, 21), (80, 90)])
+    assert sw_["reference_switches"] == 4 and sw_["detected"] == 2 and sw_["false"] == 2 and sw_["median_latency"] == 1.0, sw_
+    assert _hms(3725) == "1:02:05"
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None
@@ -1367,6 +1576,17 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--force-translate", action="store_true")
     add_common(b)
     b.set_defaults(fn=cmd_bench)
+
+    lb = sub.add_parser("lidbench", help="score the language detector on a multilingual film against its forced subtitle track")
+    lb.add_argument("video")
+    lb.add_argument("--clip", default=None, help="START-END, e.g. 0:10:00-0:40:00 (default: the whole film)")
+    lb.add_argument("--forced-track", type=int, default=None, metavar="N",
+                    help="the forced subtitle track s:N (default: the first text track flagged or titled forced)")
+    lb.add_argument("--reference", default=None, help="a forced-subtitles .srt instead of an embedded track")
+    lb.add_argument("--show", type=int, default=8, help="how many misses and false alarms to list (default 8)")
+    lb.add_argument("--out-dir", default=str(config.BENCH_DIR))
+    add_common(lb)
+    lb.set_defaults(fn=cmd_lidbench)
 
     sc = sub.add_parser("scan", help="detect languages only — no ASR, nothing written beside the videos")
     sc.add_argument("paths", nargs="*", help="files or folders (default: the current folder)")

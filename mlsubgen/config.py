@@ -218,6 +218,7 @@ SPEAKER_MIN_OFF = 0.5          # a gap shorter than this does not end a turn
 SPEAKER_MIN_OVERLAP = 0.6      # a word takes a speaker only when that speaker covers this share of it (and twice the runner-up)
 SPEAKER_MAX_AMBIGUOUS = 0.5    # labels are dropped for a file when more than this share of its words are ambiguous …
 SPEAKER_MIN_CLUSTERS = 2       # … or when the diarizer found fewer speakers than this (nothing to tell apart)
+SPEAKER_MAX_CLUSTER_RATIO = 0.25   # … or more clusters than this share of the turns (above 8): fragmentation, not speakers
 SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
