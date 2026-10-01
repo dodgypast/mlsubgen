@@ -177,7 +177,10 @@ def apply_profile(name: str | None = None) -> str:
 apply_profile()
 
 # ── Language identification (LID) — decide the language, then decode ───────────────────────────────────────
-LID_VERSION = DETECT_VERSION
+LID_VERSION = 3                # v3 (2026-10-01): function-word evidence for Latin-script languages, strongly evidenced
+                               # single windows survive the smoothing, switch points refined to the exact span. Cached
+                               # v2 verdicts are redone; remembered skips are keyed by DETECT_VERSION and are not
+LID_STRONG_MARGIN = 0.6        # a non-dominant run shorter than LID_SWITCH_MIN_WINDOWS survives when every window's margin is ≥ this
 LID_WINDOW_SPEECH_SEC = 10.0   # a detection window = consecutive VAD spans until this much SPEECH (not audio)
 LID_WINDOW_MAX_AUDIO_SEC = 30.0
 LID_SAMPLE_WINDOWS = 24        # first pass: this many windows spread over the file; every window if a 2nd language shows

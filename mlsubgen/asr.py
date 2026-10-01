@@ -235,6 +235,22 @@ class WhisperASR:
         _, info = self.model.transcribe(piece, language=None, beam_size=1, without_timestamps=True)
         return info.language, float(getattr(info, "language_probability", 0.0) or 0.0)
 
+    def language_probs(self, piece: np.ndarray) -> dict[str, float]:
+        """Every language's probability for a short piece (one encoder pass) — the boundary refinement of the LID
+        compares just two candidates, which is far more reliable on a two-second span than an open-set verdict."""
+        if len(piece) < SR // 4:
+            return {}
+        if hasattr(self.model, "detect_language"):
+            try:
+                lang, prob, all_probs = self.model.detect_language(piece)
+                if all_probs:
+                    return {l: float(p) for l, p in all_probs}
+                return {lang: float(prob)}
+            except TypeError:
+                pass
+        lang, prob = self.identify(piece)
+        return {lang: prob} if lang else {}
+
     def transcribe(self, audio: np.ndarray, chunks: list[Span], context: str = "",
                    done: dict | None = None, checkpoint=None) -> tuple[list[Word], list[dict]]:
         """Same `done` / `checkpoint` contract as QwenASR.transcribe."""

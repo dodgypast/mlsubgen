@@ -1284,6 +1284,7 @@ def cmd_pull(a: argparse.Namespace) -> int:
 
 
 def cmd_selftest(a: argparse.Namespace) -> int:
+    import numpy as np
     from .asr import Word
     from .clean import filter_cues
     from .segment import build_cues, normalise_timing
@@ -1438,6 +1439,28 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert lid.decide("zh", 0.6, "ja", "そうですね、本当に")[0] == "ja"
     assert lid.smooth(["ja", "ja", None, "en", "ja", "en", "en", "ja"], [True, True, False, True, True, True, True, True]) \
         == ["ja", "ja", "ja", "ja", "ja", "en", "en", "ja"]
+    # LID v3 (2026-10-01): function words tell Latin-script languages apart; a strongly evidenced single window of a
+    # third language survives the smoothing; the switch point moves to the exact span
+    assert lid.text_language("Che cosa vuoi? Non lo so, perché anche questo è difficile")[0] == "it"
+    assert lid.text_language("The cat sat on the mat with you")[0] == "en" and lid.text_language("hello world") == (None, 0)
+    assert lid.script_vote("Ich weiß nicht, was das ist und wir haben nichts") == ("de", 0.5)
+    assert lid.script_vote("Bonjour madame")[0] == "en" and lid.script_vote("Bonjour madame")[1] < 0.2, "undecided Latin text: a faint lean only"
+    assert lid.decide("it", 0.6, "it", "Che cosa vuoi? perché anche questo")[0] == "it"
+    assert lid.smooth(["en", "it", "en", "en"], [True] * 4, margins=[0.9, 0.9, 0.9, 0.9]) == ["en", "it", "en", "en"], "strong single window kept"
+    assert lid.smooth(["en", "it", "en", "en"], [True] * 4, margins=[0.9, 0.3, 0.9, 0.9]) == ["en", "en", "en", "en"], "weak single window absorbed"
+    from .audio import SR as _SR
+    _aud = np.zeros(12 * _SR, dtype=np.float32)
+    for k in range(6):
+        _aud[k * 2 * _SR] = float(k + 1)                      # each 2-second span starts with its own number
+
+    class _FakeWhisper:
+        def language_probs(self, piece):
+            k = int(round(float(piece[0]))) - 1
+            return {"en": 0.9, "fr": 0.1} if k < 4 else {"en": 0.1, "fr": 0.9}
+    _sp = [Span(k * 2.0, k * 2.0 + 2.0, "en" if k < 3 else "fr") for k in range(6)]
+    _win = [lid.Window(0.0, 6.0, 6.0, [0, 1, 2]), lid.Window(6.0, 12.0, 6.0, [3, 4, 5])]
+    assert lid.refine_boundaries(_aud, _sp, _win, ["en", "fr"], _FakeWhisper()) == 1
+    assert [s.lang for s in _sp] == ["en", "en", "en", "en", "fr", "fr"], [s.lang for s in _sp]
     ch = _mk([Span(0, 10, "ja"), Span(12, 20, "ja"), Span(21, 22, "ja"), Span(30, 60, "ja"), Span(61, 70, "en"), Span(200, 201, "en"),
               Span(240, 260, "en")], 300.0, max_len=240, break_silence=6, pad=0)
     assert [(c.start, c.end, c.lang) for c in ch] == [(0, 22, "ja"), (30, 60, "ja"), (61, 70, "en"), (200, 201, "en"), (240, 260, "en")], ch

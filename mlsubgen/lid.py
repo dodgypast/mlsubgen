@@ -14,6 +14,12 @@ language is a property of each stretch of speech:
      fragment the file, a real bilingual scene gets its own label.
   4. First pass samples LID_SAMPLE_WINDOWS windows spread over the file; if a second language shows up in the
      sample, every window is judged so the switch points are exact.
+  5. (v3, 2026-10-01) Where two neighbouring windows disagree, the switch is placed at the exact span: whisper is
+     asked a two-way question (A or B?) about every span of the two windows and the single best split is taken.
+     The same version made function words count for Latin-script languages (the script alone cannot tell
+     English from Italian) and let a strongly evidenced single window of a third language survive the smoothing.
+     Measured with `mlsubgen lidbench` against forced subtitle tracks: v2 reproduced about half the language
+     changes within 3 s on Babel, Inglourious Basterds and Only God Forgives, with the window edge as the cause.
 
 The result labels every VAD span; chunks are then built so each has one language, and each is decoded with
 that language forced (see asr.py). "unknown" is a state, not a guess.
@@ -89,8 +95,59 @@ def script_matches(text: str, lang: str) -> bool:
     return s == want
 
 
+# Function words that are frequent in one Latin-script language and rare in the others (LID v3, 2026-10-01). The
+# script of a decode says nothing between English, German, French, Italian or Spanish; these words do. Shared
+# words (a, de, la, no, me, in, se…) are deliberately absent: a hit must point one way.
+_FUNCTION_WORDS: dict[str, frozenset[str]] = {k: frozenset(v.split()) for k, v in {
+    "en": "the and you that this with have what your they about there which would their were from just when because",
+    "es": "el los las que por como pero está usted muy más también nosotros ellos tiene hay donde aquí porque una",
+    "fr": "les des est vous nous une pas pour dans avec sur qui c'est très aussi même votre notre cette sont",
+    "de": "und ist nicht ich sie das wir ein eine auch der die dem mit sich aber noch nur schon haben wird",
+    "it": "che della delle sono perché anche questo questa come gli nel dalla essere molto quando c'è lei una",
+    "pt": "não você com uma isso ele ela nós eles está muito também mas são tem porque quando aqui",
+    "nl": "het een niet van dat ik hij zij wij jullie maar ook nog wel zijn heeft worden deze omdat waarom",
+    "pl": "nie się jest co jak ale już tylko tego jego bardzo może czy tak jeszcze będzie przez",
+    "tr": "bir ve bu için ama değil çok daha onlar yok mı nasıl şimdi burada",
+    "id": "yang dan tidak ini itu dengan untuk saya kamu kita mereka adalah akan sudah bisa ada apa karena",
+    "ms": "yang dan tidak ini itu dengan untuk saya awak kita mereka adalah akan sudah boleh ada apa kerana",
+    "tl": "ang ng mga sa ako ikaw siya kami tayo hindi ito iyan iyon kasi lang naman ba",
+    "vi": "và của không có tôi bạn anh chị chúng được này đó như rồi đã sẽ",
+    "ca": "els una que amb per com però està molt també nosaltres aquest aquesta són hi",
+    "ro": "și este sunt pentru dar foarte acest această noi voi lor când unde",
+    "sv": "och är inte jag det att han hon också bara har kan ska ni när",
+    "da": "og er ikke jeg det hun også bare har kan skal når hvor",
+    "no": "og er ikke jeg det hun også bare har kan skal når hvor",
+    "fi": "ja ei minä sinä hän mutta myös vain olen olet ovat kun missä",
+    "hu": "és nem az egy hogy vagyok vagy ők csak még már nagyon mert",
+    "cs": "ale jsem jsi jsme jste jsou tak jak taky jen už ještě proč protože",
+    "sk": "ale som sme ste sú tak ako tiež len už ešte prečo pretože",
+    "hr": "ali sam smo ste su tako kako također samo već još zašto jer",
+    "sl": "ampak sem smo ste so tako kako tudi samo že še zakaj ker",
+    "lt": "yra bet aš tu mes jūs jie taip kaip pat tik jau dar kodėl nes",
+    "lv": "bet es tu mēs jūs viņi tā kā arī tikai jau vēl kāpēc jo",
+    "et": "ja ei aga mina sina meie teie nemad nii kuidas ka ainult juba veel miks sest",
+}.items()}
+_WORD = re.compile(r"[A-Za-zÀ-ɏ']+")
+
+
+def text_language(text: str) -> tuple[str | None, int]:
+    """Which Latin-script language the words point to: (language, hits) when one language has at least three
+    distinct function-word hits and clearly beats the runner-up; (None, 0) otherwise."""
+    words = {w.lower() for w in _WORD.findall(text.replace("’", "'"))}
+    if len(words) < 3:
+        return None, 0
+    hits = {lang: len(words & fw) for lang, fw in _FUNCTION_WORDS.items()}
+    ranked = sorted(hits.items(), key=lambda kv: -kv[1])
+    best, n = ranked[0]
+    second = ranked[1][1] if len(ranked) > 1 else 0
+    if n >= 3 and n >= 1.5 * second:
+        return best, n
+    return None, 0
+
+
 def script_vote(text: str) -> tuple[str | None, float]:
-    """What the script of Qwen's auto-decode says about the language, and how strongly."""
+    """What the script — and, for Latin script, the function words — of Qwen's auto-decode says about the
+    language, and how strongly."""
     s = script_of(text)
     if s == "ja":
         return "ja", 0.7
@@ -103,7 +160,10 @@ def script_vote(text: str) -> tuple[str | None, float]:
     if s == "cyrillic":
         return None, 0.0                # Russian, Ukrainian, Bulgarian… share it: words, yes; a language, no
     if s == "latin":
-        return "en", 0.3                # any Latin-script language; weak
+        lang, n = text_language(text)
+        if lang:
+            return lang, 0.5            # the words say which Latin-script language it is
+        return "en", 0.15               # Latin script and nothing decisive: a faint lean, no more
     return None, 0.0
 
 
@@ -253,9 +313,12 @@ def sample_indices(n: int, k: int) -> list[int]:
     return sorted({round(i * (n - 1) / (k - 1)) for i in range(k)})
 
 
-def smooth(langs: list[str | None], confident: list[bool], min_run: int = config.LID_SWITCH_MIN_WINDOWS) -> list[str | None]:
+def smooth(langs: list[str | None], confident: list[bool], min_run: int = config.LID_SWITCH_MIN_WINDOWS,
+           margins: list[float] | None = None) -> list[str | None]:
     """Uncertain windows inherit the nearest confident neighbour; a confident run shorter than `min_run` of a language
-    other than the dominant one is absorbed (it is a stray phrase, not a scene)."""
+    other than the dominant one is absorbed (it is a stray phrase, not a scene) — unless every window of the run
+    is strongly evidenced (margin ≥ LID_STRONG_MARGIN: both detectors agreeing on real words). A strongly evidenced
+    switch is never blocked (LID v3: a single ten-second exchange in a third language used to vanish)."""
     n = len(langs)
     if n == 0:
         return []
@@ -264,14 +327,16 @@ def smooth(langs: list[str | None], confident: list[bool], min_run: int = config
         return [None] * n
     dominant = max(set(conf_langs), key=conf_langs.count)
     out: list[str | None] = list(langs)
-    # runs of confident windows in a non-dominant language must be long enough
+    margins = margins or [0.0] * n
+    # runs of confident windows in a non-dominant language must be long enough — or strong
     i = 0
     while i < n:
         if confident[i] and out[i] and out[i] != dominant:
             j = i
             while j < n and confident[j] and out[j] == out[i]:
                 j += 1
-            if j - i < min_run:
+            strong = all(margins[k] >= config.LID_STRONG_MARGIN for k in range(i, j))
+            if j - i < min_run and not strong:
                 for k in range(i, j):
                     out[k] = dominant
             i = j
@@ -318,7 +383,7 @@ def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool =
             if not w.judged:
                 judge(w)
     judged = [w for w in windows if w.judged]
-    labels = smooth([w.lang for w in judged], [w.confident for w in judged])
+    labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged])
     # every window gets a label: unjudged ones (monolingual sample) take the nearest judged neighbour's
     label_at = {id(w): l for w, l in zip(judged, labels)}
     final: list[str | None] = []
@@ -330,15 +395,66 @@ def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool =
     for i, l in enumerate(final):                  # leading unjudged windows take the first label
         if l is None and last is not None:
             final[i] = next((x for x in final[i:] if x), last)
-    seconds: dict[str, float] = {}
     for w, l in zip(windows, final):
         for i in w.spans:
             spans[i].lang = l
-        if l:
-            seconds[l] = seconds.get(l, 0.0) + w.speech
+    moved = 0
+    if engines.whisper is not None and not whisper_only:
+        moved = refine_boundaries(audio, spans, windows, final, engines.whisper)
+        if moved:
+            notes.append(f"{moved} language switch(es) placed at the exact span by the boundary refinement")
+    seconds: dict[str, float] = {}
+    for s in spans:
+        if s.lang:
+            seconds[s.lang] = seconds.get(s.lang, 0.0) + s.dur
     dominant = max(seconds, key=seconds.get) if seconds else None
     conf = sum(1 for w in judged if w.confident)
     return LidResult(config.LID_VERSION, windows, spans, dominant, seconds, conf, len(judged) - conf, notes=notes)
+
+
+def refine_boundaries(audio: np.ndarray, spans: list[Span], windows: list[Window], final: list[str | None],
+                      whisper, min_span: float = 0.6) -> int:
+    """Where two neighbouring windows disagree, the switch happened somewhere inside them — not at the window edge.
+    Every span of the two windows gets whisper's probability for just the two candidate languages (a two-way
+    question a short span can answer), and the one split point that best explains the sequence (all A, then all B)
+    is taken. The windows themselves keep their labels; the spans carry the refined ones. Returns how many
+    switches were moved off a window edge (LID v3, 2026-10-01: the baseline reproduced only half the language
+    changes within 3 s, and the ten-second window was the reason)."""
+    moved = 0
+    for i in range(len(windows) - 1):
+        a, b = final[i], final[i + 1]
+        if not a or not b or a == b:
+            continue
+        idx = windows[i].spans + windows[i + 1].spans
+        pa: list[float] = []
+        pb: list[float] = []
+        for k in idx:
+            s = spans[k]
+            if s.dur < min_span:
+                pa.append(0.5); pb.append(0.5)             # too short to ask: no opinion
+                continue
+            probs = whisper.language_probs(slice_audio(audio, s.start, s.end))
+            x, y = probs.get(a, 0.0), probs.get(b, 0.0)
+            tot = x + y
+            pa.append(x / tot if tot > 0 else 0.5)
+            pb.append(y / tot if tot > 0 else 0.5)
+        n = len(idx)
+        left = len(windows[i].spans)
+        # spans of the left window already given another language by the previous pair (A B A: the switch into
+        # this window was placed by that pass) stay as they are: the split can only fall after them
+        lock = max((pos + 1 for pos in range(left) if spans[idx[pos]].lang != a), default=0)
+        # split after position c: spans[:c] are A, spans[c:] are B; c = n: all A; c = 0: all B
+        best_c, best_score = left, None
+        for c in range(lock, n + 1):
+            score = sum(pa[lock:c]) + sum(pb[c:])
+            if best_score is None or score > best_score + 1e-9:
+                best_c, best_score = c, score
+        if best_c != left:
+            moved += 1
+        for pos, k in enumerate(idx):
+            if pos >= lock:
+                spans[k].lang = a if pos < best_c else b
+    return moved
 
 
 def forced(spans: list[Span], lang: str) -> LidResult:
