@@ -238,13 +238,19 @@ SPEAKER_SEGMENTATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/downl
 SPEAKER_SEGMENTATION_FILE = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"   # pyannote segmentation-3.0, MIT
 # The speaker embedding model decides how well turns cluster into voices. Any file from sherpa-onnx's
 # speaker-recongition-models release works: MLSUBGEN_SPEAKER_EMBEDDING=<file> or --speaker-embedding <file>,
-# then `mlsubgen pull speakers`. Known ones (all CPU, 16 kHz): 3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k
-# (the default so far, 38 MB, trained on Chinese), wespeaker_en_voxceleb_resnet34_LM (26 MB, VoxCeleb),
-# wespeaker_en_voxceleb_resnet293_LM (110 MB, VoxCeleb, the strongest WeSpeaker), nemo_en_titanet_large (97 MB),
-# 3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced (27 MB, Chinese + English). Each has its own clustering
-# threshold scale, so compare them with --speakers N first.
+# then `mlsubgen pull speakers`. Measured 2026-10-02 on Babel with --speakers 30 — voice/language purity (the share
+# of each voice's confident speech in its own main language; what the cue stage's "same voice" labels depend on),
+# speaker priors engaged, and the detector's recall / switch recall / invented switches:
+#   3dspeaker campplus zh_en advanced (27 MB)        purity 0.80  priors 16   92% / 65% / 64   ← the default
+#   nemo titanet_large (97 MB)                        purity 0.76  priors  7   92% / 67% / 61
+#   3dspeaker eres2net_base zh-cn (38 MB, old default) purity 0.72  priors  9   92% / 70% / 68
+#   wespeaker voxceleb resnet34_LM (26 MB)            purity 0.68  priors  4   92% / 69% / 65
+#   wespeaker voxceleb resnet293_LM (110 MB)          purity 0.63  priors  5   91% / 69% / 69
+# The detector does not care which (its gains come from the turn boundaries, which are the segmentation model's);
+# the clustering does, and the models trained on Chinese + English material cluster a film better than the
+# VoxCeleb ones. Each model has its own clustering threshold scale, so compare them with --speakers N first.
 SPEAKER_EMBEDDING_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
-SPEAKER_EMBEDDING_FILE = os.environ.get("MLSUBGEN_SPEAKER_EMBEDDING", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+SPEAKER_EMBEDDING_FILE = os.environ.get("MLSUBGEN_SPEAKER_EMBEDDING", "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx")
 if not SPEAKER_EMBEDDING_FILE.endswith(".onnx"):
     SPEAKER_EMBEDDING_FILE += ".onnx"
 SPEAKER_EMBEDDING_URL = SPEAKER_EMBEDDING_RELEASE + SPEAKER_EMBEDDING_FILE

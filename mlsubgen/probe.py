@@ -32,9 +32,52 @@ class SubTrack:
     language: str
     title: str
     codec: str
-    is_text: bool       # text (convertible to srt) vs bitmap (pgs/vobsub — unusable without OCR)
+    is_text: bool       # text (convertible to srt) vs bitmap (pgs/vobsup — unusable without OCR)
     forced: bool
     is_default: bool
+    sniffed: bool = False   # the language came from the track's own text, not from a tag (0.4.7)
+
+
+_SNIFF_CACHE: dict[tuple[str, float, int], str | None] = {}
+
+
+def language_of_text(text: str, min_hits: int = 10) -> str | None:
+    """The language of a subtitle track from its words: script first (kana, Thai, Hangul, Han, Greek), then the
+    function words for Latin-script languages. None when the text does not say — too little, or a Latin-script
+    text with no clear winner. Cyrillic is left undecided (Russian, Ukrainian, Bulgarian share it)."""
+    from .lid import script_of, text_language
+    body = " ".join(l for l in text.splitlines() if l.strip() and not l.strip().isdigit() and "-->" not in l)
+    if len(body) < 200:
+        return None
+    s = script_of(body)
+    if s in ("ja", "th", "ko"):
+        return s
+    if s == "han":
+        return "zh"
+    if s == "greek":
+        return "el"
+    if s == "latin":
+        lang, n = text_language(body)
+        return lang if lang and n >= min_hits else None
+    return None
+
+
+def sniff_subtitle_language(path: Path, track: SubTrack, seconds: int = 1200) -> str | None:
+    """What language an untagged text track is in, read from its first `seconds` of cues (2026-10-02: an ASS track
+    tagged `und` with no title was invisible to the planner, and a run would have transcribed an episode that
+    already had English subtitles). Reading only the opening minutes keeps it cheap on a large file."""
+    key = (str(path), path.stat().st_mtime, track.index)
+    if key in _SNIFF_CACHE:
+        return _SNIFF_CACHE[key]
+    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-t", str(seconds), "-i", str(path), "-map", f"0:s:{track.index}",
+           "-c:s", "srt", "-f", "srt", "pipe:1"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
+        code = language_of_text(res.stdout) if res.returncode == 0 else None
+    except (subprocess.TimeoutExpired, OSError):
+        code = None
+    _SNIFF_CACHE[key] = code
+    return code
 
 
 @dataclass
@@ -87,6 +130,12 @@ def probe(path: Path, prefer_index: int | None = None) -> ProbeResult:
             duration=float(s.get("duration") or 0.0), start_time=float(s.get("start_time") or 0.0),
         ))
         a += 1
+    # untagged text tracks: read the language from their own words (0.4.7) — a tag-less track used to be invisible
+    for t in subs:
+        if t.is_text and t.language in ("", "und") and not t.title:
+            code = sniff_subtitle_language(path, t)
+            if code:
+                t.language, t.sniffed = code, True
     if not tracks:
         return ProbeResult(duration, [], None, "no audio streams", subs)
     if prefer_index is not None:
@@ -118,5 +167,6 @@ def describe_tracks(res: ProbeResult) -> str:
     for t in res.subs:
         kind = "text" if t.is_text else "bitmap (needs OCR — ignored)"
         lines.append(f"   s:{t.index}  lang={t.language:<4} {t.codec:<10} {kind}"
+                     f"{' (language read from the text)' if t.sniffed else ''}"
                      f"{'  forced' if t.forced else ''}{'  default' if t.is_default else ''}{'  ' + t.title if t.title else ''}")
     return "\n".join(lines)

@@ -123,7 +123,7 @@ files that can be re-queued with the language forced.
 
 | stage | what |
 |---|---|
-| embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR |
+| embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR. An untagged text track has its language read from its own words |
 | probe | `ffprobe` picks the audio track (tag, then title, then the default) — `mlsubgen tracks FILE` shows them, `--audio-track N` overrides |
 | audio | `ffmpeg` → 16 kHz mono wav, kept until the file's diarization and ASR are done, then deleted |
 | speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU, before anything listens to the words; see *Speakers* |
@@ -149,9 +149,10 @@ segmentation-3.0 (ONNX)  →  3D-Speaker embeddings  →  sherpa clustering  →
                                                                               └─ after ASR:  word attribution → cue boundaries → translator continuity
 ```
 
-- **Models.** `mlsubgen pull speakers` downloads two ONNX files (46 MB) from sherpa-onnx's GitHub Releases:
-  pyannote's `segmentation-3.0` (MIT) and a 3D-Speaker ERes2Net embedding model (Apache-2.0), and writes a
-  `NOTICE.txt` with the attributions beside them. mlsubgen uses sherpa-onnx's ONNX distribution from GitHub, so
+- **Models.** `mlsubgen pull speakers` downloads two ONNX files (33 MB) from sherpa-onnx's GitHub Releases:
+  pyannote's `segmentation-3.0` (MIT) and a 3D-Speaker CAM++ embedding model trained on Chinese and English
+  (Apache-2.0), and writes a `NOTICE.txt` with the attributions beside them. Any embedding model from that release
+  can be used instead (`--speaker-embedding FILE`); `config.py` records how five of them compared. mlsubgen uses sherpa-onnx's ONNX distribution from GitHub, so
   this feature does not require a Hugging Face account or token. The Models panel shows both files like the other
   models. sherpa's clustering is not pyannote's full pipeline; mlsubgen does not claim to reproduce it.
 - **`auto` or `N`.** `auto` lets the clustering decide the speaker count (threshold in `config.py`); `--speakers N`

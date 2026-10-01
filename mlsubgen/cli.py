@@ -1677,6 +1677,17 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     sw_ = _switches([(10, 20), (50, 60)], [(11, 21), (80, 90)])
     assert sw_["reference_switches"] == 4 and sw_["detected"] == 2 and sw_["false"] == 2 and sw_["median_latency"] == 1.0, sw_
     assert _hms(3725) == "1:02:05"
+    # untagged subtitle tracks (0.4.7): the language read from the words; nothing decided on too little
+    from .probe import language_of_text
+    en_srt = "1\n00:00:01,000 --> 00:00:03,000\nWhat are you doing with that?\n\n2\n00:00:04,000 --> 00:00:06,000\n" \
+             "I just think there would be a problem because of what they said.\n\n3\n00:00:07,000 --> 00:00:09,000\n" \
+             "This is your house and their house, which were from the start the same when you have it.\n\n" \
+             "4\n00:00:10,000 --> 00:00:12,000\nAbout that: the people you know and the ones that just left.\n"
+    assert language_of_text(en_srt) == "en", language_of_text(en_srt)
+    ja_srt = "1\n00:00:01,000 --> 00:00:03,000\n" + "そうですね、本当にそう思います。今日はいい天気ですね。" * 10
+    assert language_of_text(ja_srt) == "ja"
+    assert language_of_text("1\n00:00:01,000 --> 00:00:02,000\nhello\n") is None, "too little text decides nothing"
+    assert language_of_text("1\n00:00:01,000 --> 00:00:02,000\n" + "lorem ipsum dolor sit amet consectetur " * 10) is None, "Latin text with no function words decides nothing"
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None
