@@ -54,11 +54,11 @@ git clone https://github.com/dodgypast/mlsubgen.git && cd mlsubgen
 cp .env.example .env            # MEDIA_DIR = the folder with your videos; default languages; your uid/gid
 mkdir -p data models            # state and the model cache, created by you so the containers can write them
 docker compose up -d --build    # the image is ~14 GB (CUDA torch and the ASR stacks), 10–20 minutes the first time
-ollama pull qwen3.8:27b         # on the host — the default translator for Japanese → English
-ollama pull gemma4:31b-it-qat   # the default for every other language pair
+docker compose run --rm worker pull   # the ASR models (~8 GB) and the two default translators (~37 GB, into Ollama)
 ```
 
-Then open `http://<host>:8790`. The containers use host networking (Ollama at `127.0.0.1:11434`); the web UI
+Or open `http://<host>:8790` and use the **Models** panel: it shows what is ready and pulls anything missing with
+a click, with progress. The worker uses a model as soon as it is there. The containers use host networking (Ollama at `127.0.0.1:11434`); the web UI
 has **no login**, so keep it on a LAN or VPN address. Your videos are bind-mounted at `/media`, and
 `MLSUBGEN_MEDIA_ROOTS=/media` confines the folder picker and the worker to them. Stopping the worker container
 interrupts the running job cleanly; it resumes from its checkpoints on the next start.
@@ -71,7 +71,7 @@ bash setup.sh                   # venv, CUDA torch, pinned deps, selftest, the `
 ```
 
 `setup.sh` ends with the remaining steps: edit the two unit files (`MLSUBGEN_MEDIA_ROOTS`, `MLSUBGEN_TARGETS`),
-pull a translator into Ollama, then `systemctl --user enable --now mlsubgen-worker mlsubgen-web`.
+`mlsubgen pull` for the models, then `systemctl --user enable --now mlsubgen-worker mlsubgen-web`.
 
 ## Using it
 
@@ -81,6 +81,8 @@ mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
 mlsubgen languages               # the 45 codes, their native names, which engine decodes each
+mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
+mlsubgen pull                    # download what a default run needs;  pull gemma4 · pull some/tag:latest · pull --all
 mlsubgen jobs                    # the queue;  mlsubgen log ID · pause ID · resume ID · cancel ID · retry ID
 mlsubgen help                    # the one-screen guide;  mlsubgen help run  for every option
 ```

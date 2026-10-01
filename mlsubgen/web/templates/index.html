@@ -88,6 +88,25 @@
 </section>
 
 <section class="card">
+  <details id="models-panel">
+    <summary><h2 class="inline-h2">Models <small class="muted" id="models-note">…</small></h2></summary>
+    <p class="muted">The translators live in Ollama and are pulled through it; the ASR models are downloaded into the
+      Hugging Face cache. A pull runs in the background — this panel shows its progress, and the worker picks the
+      model up as soon as it is there.</p>
+    <table id="models">
+      <thead><tr><th>model</th><th>tag / repo</th><th>status</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row">
+      <input id="pull-name" placeholder="any other Ollama tag, e.g. qwen3.8:14b" size="34" spellcheck="false">
+      <button type="button" class="secondary small" id="pull-custom">pull</button>
+      <button type="button" class="secondary small" id="pull-defaults" title="the ASR models + the translators of the default routes">pull everything a default run needs</button>
+      <span id="pull-result" class="muted"></span>
+    </div>
+  </details>
+</section>
+
+<section class="card">
   <h2>Queue <small class="muted" id="queue-note"></small>
     <button class="secondary small" id="purge" title="drop failed and cancelled jobs from this list (logs stay)">clear cancelled/failed</button>
     <button class="secondary small" id="purge-done" title="drop every finished job, done ones included">clear finished</button></h2>

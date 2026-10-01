@@ -40,6 +40,11 @@ pre.log { max-height:60vh; }
 .pill.running, .pill.cancelling, .pill.pausing { background:#1f4a7a; color:#cfe3ff; }
 .pill.paused { background:#4a3f6a; color:#e6dcff; }
 
+/* the Models panel: a collapsed <details> with the heading in its summary (2026-10-02) */
+#models-panel > summary { cursor: pointer; }
+#models-panel > summary .inline-h2 { display: inline; margin: 0; }
+#models td code { font-size: .9em; }
+
 /* the subtitle-language dropdown: a <details> whose summary shows the ticked languages (2026-10-01) */
 .dropdown { position: relative; display: inline-block; vertical-align: middle; }
 .dropdown summary { list-style: none; cursor: pointer; display: inline-block; min-width: 14em; max-width: 34em;

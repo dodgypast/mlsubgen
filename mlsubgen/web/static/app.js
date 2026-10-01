@@ -76,8 +76,44 @@ async function browse(path) {
   setPicked([]);                                    // a new folder: start the selection over
 }
 
+const gb = n => n ? `${(n / 1e9).toFixed(1)} GB` : "";
+
+async function refreshModels() {
+  const panel = $("#models-panel"); if (!panel) return;
+  let m;
+  try { m = await api("/api/models"); } catch (e) { $("#models-note").textContent = "unavailable"; return; }
+  const state = x => {
+    const p = x.pull;
+    if (p && (p.state === "running" || p.state === "queued")) {
+      const pct = p.total ? ` ${Math.round(100 * p.completed / p.total)}%` : "";
+      return `<span class="pill running">${p.state}${pct}</span> <span class="muted">${esc(p.message || "")}${p.total ? ` · ${gb(p.completed)} / ${gb(p.total)}` : ""}</span>`;
+    }
+    if (p && p.state === "error") return `<span class="pill failed">error</span> <span class="muted">${esc(p.message)}</span>`;
+    return x.ready ? `<span class="pill done">ready</span> <span class="muted">${gb(x.size)}</span>` : `<span class="pill queued">missing</span>`;
+  };
+  const row = (x, kind) => `<tr><td>${esc(x.name)}${kind === "tl" && m.routes.some(r => r.preset === x.name) ? ' <span class="muted">(route default)</span>' : ""}</td>
+    <td><code>${esc(x.model)}</code></td><td>${state(x)}</td>
+    <td>${x.ready || (x.pull && x.pull.state !== "error" && x.pull.state !== "done") ? "" : `<button class="secondary small" data-pull="${esc(x.name)}">pull</button>`}</td></tr>`;
+  $("#models tbody").innerHTML = m.translators.map(x => row(x, "tl")).join("") + m.asr.map(x => row(x, "asr")).join("");
+  const missing = [...m.translators.filter(x => !x.ready && m.routes.some(r => r.preset === x.name)), ...m.asr.filter(x => !x.ready)].length;
+  $("#models-note").textContent = (m.ollama.reachable ? "" : "Ollama unreachable · ") + (m.active ? "pulling…" : (missing ? `${missing} missing for a default run` : "all ready for a default run"))
+    + (m.offline ? " · HF offline mode" : "");
+  if (m.active) setTimeout(refreshModels, 2000);
+}
+
 function mlsubgenIndex() {
   refreshStatus(); refreshJobs();
+  // the Models panel: refreshed when opened, polled every 2 s while a pull is running
+  refreshModels();
+  const pull = async name => {
+    try { $("#pull-result").textContent = (await api("/api/models/pull", { method: "POST", body: new URLSearchParams({ name }) })).result; }
+    catch (err) { $("#pull-result").textContent = err.message; }
+    refreshModels();
+  };
+  $("#models").addEventListener("click", e => { const b = e.target.closest("button[data-pull]"); if (b) { b.disabled = true; pull(b.dataset.pull); } });
+  $("#pull-custom").addEventListener("click", () => { const n = $("#pull-name").value.trim(); if (n) pull(n); });
+  $("#pull-defaults").addEventListener("click", () => pull("defaults"));
+  $("#models-panel").addEventListener("toggle", () => { if ($("#models-panel").open) refreshModels(); });
   // the "Subtitles in" dropdown: the summary names the ticked languages; click outside closes it
   const dd = $("#targets-dd");
   if (dd) {

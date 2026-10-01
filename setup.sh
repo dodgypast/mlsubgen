@@ -41,11 +41,10 @@ Next:
   1. Edit the units — the folders your videos live in, your default languages:
        ~/.config/systemd/user/mlsubgen-worker.service   (MLSUBGEN_MEDIA_ROOTS=..., MLSUBGEN_TARGETS=...)
        ~/.config/systemd/user/mlsubgen-web.service      (the same two lines)
-  2. A translator model in Ollama (https://ollama.com), e.g.
-       ollama pull qwen3.8:27b          # 18 GB — the default route for Japanese → English (24 GB GPU)
-       ollama pull gemma4:31b-it-qat    # 19 GB — the default for every other language pair
-       ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M   # ~18 GB on disk, ~3 B active — the fast fallback preset
-     then `mlsubgen models` shows which presets are ready; `-t NAME` / `--model TAG` pick others.
+  2. The models, with Ollama (https://ollama.com) running on this machine:
+       mlsubgen pull                    # the ASR models (~8 GB) + the default translators qwen3.8:27b and gemma4:31b-it-qat
+       mlsubgen pull qwen3-30b          # optional: the fast MoE fallback preset (~3 B active, ~18 GB on disk)
+     `mlsubgen models` shows what is ready; the web UI's Models panel does the same with a click.
   3. Start the services (they survive logouts and reboots):
        loginctl enable-linger "$USER"
        systemctl --user daemon-reload && systemctl --user enable --now mlsubgen-worker mlsubgen-web

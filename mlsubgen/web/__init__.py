@@ -484,6 +484,23 @@ def create_app() -> FastAPI:
         finally:
             conn.close()
 
+    @app.get("/api/models")
+    def api_models():
+        """The Models panel: translator presets in Ollama, ASR models in the HF cache, any pull in progress."""
+        from .. import models
+        return models.status()
+
+    @app.post("/api/models/pull")
+    async def api_models_pull(request: Request):
+        """Queue a download: a preset name, an Ollama tag, an ASR model name, 'asr' or 'defaults'."""
+        from .. import models
+        form = await request.form()
+        name = (form.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name required")
+        key, msg = models.request_pull(name)
+        return {"key": key, "result": msg}
+
     @app.get("/api/ls")
     def api_ls(path: str = ""):
         if not path:

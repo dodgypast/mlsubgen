@@ -153,7 +153,8 @@ Commands                                            more:  mlsubgen help <comman
   bench     compare translators on one video/clip   mlsubgen bench VIDEO --clip 0:10:00-0:20:00
   tracks    show the audio tracks and which is used mlsubgen tracks FILE
   languages the {len(config.LANG_NAMES)} subtitle languages (code, name, which ASR engine decodes it)
-  models    translator presets, and whether Ollama has them
+  models    what is ready: the translator presets in Ollama, the ASR models in the Hugging Face cache
+  pull      download models before the first run: mlsubgen pull (ASR + default translators) · pull gemma4 · pull --all
   clean     delete leftover work files and temp wavs
   selftest  exercise the text pipeline (no GPU needed)
   jobs      the queue of the mlsubgen-worker service    mlsubgen jobs [--all]   (also: log | cancel | retry ID | purge)
@@ -891,14 +892,36 @@ def cmd_tracks(a: argparse.Namespace) -> int:
 
 
 def cmd_models(a: argparse.Namespace) -> int:
-    from .translate import LLMClient
-    for name, tr in TRANSLATORS.items():
-        client = LLMClient(tr, a.url, a.backend)
-        ok, msg = client.available()
-        print(f"{name:<16} {tr.model:<40} {'ready' if ok else msg}   — {tr.note}")
-    print(f"\nASR: {config.ASR_MODEL_QWEN} + {config.ALIGNER_MODEL} (downloaded on first use); "
-          f"whisper alt: {config.ASR_MODEL_WHISPER}")
+    from . import models
+    st = models.status(a.url)
+    o = st["ollama"]
+    print(f"translators (Ollama at {o['url']}: {'reachable' if o['reachable'] else 'UNREACHABLE'}):")
+    for t in st["translators"]:
+        state = f"ready ({t['size'] / 1e9:.1f} GB)" if t["ready"] else "not pulled"
+        print(f"  {t['name']:<16} {t['model']:<40} {state:<16} — {t['note']}")
+    print("  routes: " + ", ".join(f"{r['pair']}: {r['preset']}" for r in st["routes"]))
+    print(f"\nASR models (Hugging Face cache {models.hub_dir()}{', OFFLINE' if st['offline'] else ''}):")
+    for m in st["asr"]:
+        state = f"ready ({m['size'] / 1e9:.1f} GB)" if m["ready"] else "not downloaded"
+        print(f"  {m['name']:<26} {m['model']:<40} {state}")
+    missing = [t["name"] for t in st["translators"] if not t["ready"] and t["name"] in set(config.TRANSLATE_ROUTES.values())]
+    missing += [m["name"] for m in st["asr"] if not m["ready"]]
+    if missing:
+        print(f"\nmissing for a default run: {', '.join(missing)}  →  mlsubgen pull")
     return 0
+
+
+def cmd_pull(a: argparse.Namespace) -> int:
+    """Download models ahead of the first run: `mlsubgen pull` = the ASR models + the translators of the default
+    routes; names = presets, Ollama tags, ASR labels, 'asr', 'defaults'; --all = every preset too."""
+    from . import models
+    names = list(a.names) or ["defaults"]
+    if a.all:
+        names = ["asr"] + list(TRANSLATORS)
+    rc = 0
+    for n in names:
+        rc |= models.pull_now(n, a.url)
+    return rc
 
 
 def cmd_selftest(a: argparse.Namespace) -> int:
@@ -953,7 +976,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         assert not list(Path(d).glob(".mlsubgen-*")), "atomic write left its temp file behind"
     # every module at least imports (a syntax error in a stage only used at run time would otherwise wait for a run)
     import importlib
-    for mod in ("audio", "probe", "subs", "vad", "asr", "pipeline", "translate", "jobs", "worker", "web"):
+    for mod in ("audio", "probe", "subs", "vad", "asr", "pipeline", "translate", "jobs", "worker", "web", "models"):
         importlib.import_module(f"mlsubgen.{mod}")
     # translation windows: checkpoint after each, and a resumed list skips the windows it already has
     from .translate import translate_cues
@@ -1079,6 +1102,16 @@ def cmd_selftest(a: argparse.Namespace) -> int:
            "Comment: 0,0:00:02.00,0:00:08.00,Default,,0,0,0,,private\n")
     ac = ass_to_cues(ass)
     assert [(c.start, c.end, c.text) for c in ac] == [(2.0, 8.0, "The town zoo\nis busy")], [(c.start, c.end, c.text) for c in ac]
+    # models: Ollama's pull stream parses, names resolve to the right kind of download, status needs no server
+    from . import models as _models
+    assert _models.parse_pull_line('{"status":"pulling abc","total":100,"completed":40}') == (40, 100, "pulling abc", False)
+    assert _models.parse_pull_line('{"status":"success"}')[3] is True
+    assert _models.resolve(config.DEFAULT_TRANSLATOR) == [(config.DEFAULT_TRANSLATOR, "ollama", TRANSLATORS[config.DEFAULT_TRANSLATOR].model)]
+    assert _models.resolve("some/other:tag") == [("some/other:tag", "ollama", "some/other:tag")]
+    assert {k for k, _, _ in _models.resolve("asr")} == set(_models.ASR_MODELS)
+    assert len(_models.resolve("defaults")) == len(_models.ASR_MODELS) + len(set(config.TRANSLATE_ROUTES.values()))
+    st = _models.status("http://127.0.0.1:1")                    # nothing listens there: reported, not raised
+    assert st["ollama"]["reachable"] is False and len(st["asr"]) == 3 and all("ready" in t for t in st["translators"])
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None
@@ -1167,6 +1200,11 @@ def main(argv: list[str] | None = None) -> int:
     m.set_defaults(fn=cmd_models)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.set_defaults(fn=cmd_languages)
+    pl = sub.add_parser("pull", help="download models before the first run: the ASR models and the default translators, or the names given")
+    pl.add_argument("names", nargs="*", help="translator presets, Ollama tags, ASR model names, 'asr' or 'defaults' (default: defaults)")
+    pl.add_argument("--all", action="store_true", help="every translator preset as well as the ASR models")
+    pl.add_argument("--url", default=None, help="Ollama URL (default: MLSUBGEN_LLM_URL or http://127.0.0.1:11434)")
+    pl.set_defaults(fn=cmd_pull)
 
     s = sub.add_parser("selftest", help="exercise segmentation, filters, parsing and typesetting without a GPU")
     s.set_defaults(fn=cmd_selftest)
