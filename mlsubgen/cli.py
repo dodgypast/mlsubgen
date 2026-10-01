@@ -1176,9 +1176,46 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
     dominant = res.dominant or "?"
     speech = _merge_intervals([(s.start, s.end) for s in res.spans])
     truth_raw = _merge_intervals([(c.start, c.end) for c in ref])
+    # a forced track is a lower bound on foreign speech, not a complete map: songs, "[speaking German]" cards and
+    # lines the subtitler left alone are foreign speech it does not show. Stretches a listener has confirmed as
+    # foreign (bench/verified.json: {"<file stem starts with>": [[start, end, "note"], …]}) are taken out of the
+    # scoring on both sides — neither a hit nor a false alarm (2026-10-01: two Basterds "false alarms" and the
+    # Thai karaoke scene were all the detector being right where the reference was silent)
+    verified: list[tuple[float, float]] = []
+    vfile = Path(a.out_dir).expanduser() / "verified.json"
+    if vfile.is_file():
+        import json as _json
+        try:
+            for key, items in _json.loads(vfile.read_text(encoding="utf-8")).items():
+                if video.stem.startswith(key):
+                    verified += [(float(s) - (clip[0] if clip else 0.0), float(e) - (clip[0] if clip else 0.0)) for s, e, *_ in items]
+        except (ValueError, TypeError) as e:
+            _log(f"[lidbench] ⚠ {vfile.name} unreadable ({e}) — ignored")
+        verified = _merge_intervals([(s, e) for s, e in verified if e > 0])
+        if verified:
+            _log(f"[lidbench] {len(verified)} listener-verified stretch(es) ({sum(e - s for s, e in verified):.0f} s) excluded from the scoring")
+
+    def _minus(items: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        """The intervals with the verified stretches cut out."""
+        out = []
+        for s, e in items:
+            cur = [(s, e)]
+            for vs, ve in verified:
+                nxt = []
+                for x, y in cur:
+                    if ve <= x or vs >= y:
+                        nxt.append((x, y))
+                    else:
+                        if x < vs:
+                            nxt.append((x, vs))
+                        if ve < y:
+                            nxt.append((ve, y))
+                cur = nxt
+            out += cur
+        return [(s, e) for s, e in out if e - s > 0.01]
     # forced subtitles also cover signed dialogue and on-screen text, where nothing is spoken: only the part of the
     # reference that overlaps detected speech can be asked of an acoustic detector
-    truth = _merge_intervals(_intersect(truth_raw, speech))
+    truth = _minus(_merge_intervals(_intersect(truth_raw, speech)))
     ours_by_lang: dict[str, float] = {}
     foreign = []
     for s in res.spans:
@@ -1186,6 +1223,7 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
         ours_by_lang[lang] = ours_by_lang.get(lang, 0.0) + s.dur
         if lang != dominant:
             foreign.append((s.start, s.end))
+    foreign = _minus(foreign)
     ours = _merge_intervals(foreign)
     t_raw = sum(e - s for s, e in truth_raw)
     t_truth = sum(e - s for s, e in truth)
