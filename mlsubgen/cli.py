@@ -94,14 +94,15 @@ def add_common(p: argparse.ArgumentParser) -> None:
                         "whisper elsewhere, e.g. Thai); qwen / whisper force one engine for everything")
     p.add_argument("--asr-model", default=None, help="Qwen3-ASR model id (default Qwen/Qwen3-ASR-1.7B)")
     p.add_argument("--whisper-model", default=None, help=f"faster-whisper model (default {config.ASR_MODEL_WHISPER})")
-    p.add_argument("--audio-track", type=int, default=None, help="audio track index (a:N) instead of the Japanese-tagged one")
+    p.add_argument("--audio-track", type=int, default=None, help="audio track index (a:N) instead of the auto-picked one (mlsubgen tracks FILE)")
     p.add_argument("--source", default=None, metavar="LANG",
-                   help="skip the language detector: the audio is this language (ja, en, th, zh, ko …)")
+                   help="skip the language detector: the audio is this language (a code from `mlsubgen languages`)")
     p.add_argument("--assume-ja", action="store_true", help="same as --source ja")
     p.add_argument("--context", default="", help="what the programme is about, names, terms — biases ASR and translation")
     p.add_argument("--context-file", default=None, help="file with the same, one paragraph")
     p.add_argument("--glossary", default=None, help="TSV file: source<TAB>target (names, terms)")
-    p.add_argument("--genre", default="a Japanese documentary / interview programme", help="register hint for the translator")
+    p.add_argument("--genre", default="a documentary / interview programme",
+                   help="register hint for the translator, e.g. \"a slapstick family anime\" (default: a documentary / interview programme)")
     p.add_argument("--work-dir", default=str(config.WORK_DIR))
     p.add_argument("--backend", default=None, choices=["ollama", "openai"])
     p.add_argument("--url", default=None, help="LLM server URL (default http://127.0.0.1:11434)")
@@ -139,78 +140,78 @@ def cmd_languages(a: argparse.Namespace) -> int:
 
 
 HELP_TEXT = f"""\
-mlsubgen {__version__} — subtitles for videos, entirely on this machine: the language of every stretch of speech is
-detected, each stretch is transcribed with that language forced, and each target language gets its own .srt
+mlsubgen {__version__} — subtitles for videos, entirely on your own machine.
+The language of every stretch of speech is detected, each stretch is transcribed with that language forced (two
+recognisers, reconciled by a local LLM), and every target language gets its own <video>.<lang>.srt beside the video.
 
-  cd /folder/of/videos && mlsubgen        every video here and in subfolders → <video>.en.srt (default targets: {config.DEFAULT_TARGETS})
-  mlsubgen --target en,th FOLDER          English and Thai subtitles (cues already in the target are copied through)
-  mlsubgen --overwrite FILE               redo one file from scratch (or delete its .srt and run: mlsubgen FILE)
+USAGE
+  mlsubgen [run] [PATH ...] [options]    subtitle every video in the paths (default: this folder, recursively)
+  mlsubgen COMMAND [arguments]           one of the commands below;   mlsubgen help COMMAND   shows its options
+  mlsubgen --version
 
-Commands                                            more:  mlsubgen help <command>
-  run       (default) subtitle videos               mlsubgen run -h
-  scan      detect languages only, no ASR, nothing written beside the videos — one line per file
-  compare   word-level agreement between two ASR results of one file (old vs new detector, forced vs auto)
-  bench     compare translators on one video/clip   mlsubgen bench VIDEO --clip 0:10:00-0:20:00
-  tracks    show the audio tracks and which is used mlsubgen tracks FILE
-  languages the {len(config.LANG_NAMES)} subtitle languages (code, name, which ASR engine decodes it)
-  models    what is ready: the translator presets in Ollama, the ASR models in the Hugging Face cache
-  pull      download models before the first run: mlsubgen pull (ASR + default translators) · pull gemma4 · pull --all
-  clean     delete leftover work files and temp wavs
-  selftest  exercise the text pipeline (no GPU needed)
-  jobs      the queue of the mlsubgen-worker service    mlsubgen jobs [--all]   (also: log | cancel | retry ID | purge)
-  web       the browser front end (mlsubgen-web.service) http://<this host>:{config.WEB_PORT}
+QUICK START
+  mlsubgen pull                          download the models: ASR (~8 GB) + the default translators (into Ollama)
+  cd /folder/of/videos && mlsubgen       <video>.{config.DEFAULT_TARGETS.split(',')[0]}.srt for every video (default languages: {config.DEFAULT_TARGETS})
+  mlsubgen --target en,th,de FOLDER      one .srt per language;   mlsubgen languages   lists the {len(config.LANG_NAMES)} codes
+  mlsubgen --source ja FOLDER            skip the language detector: the audio is Japanese
+  mlsubgen --overwrite FILE              redo one file from scratch
 
-Options you will actually use (run)
-  --target en,th          subtitle languages to write, one .srt each (default {config.DEFAULT_TARGETS}; any of: mlsubgen languages)
-  --source LANG           the audio IS this language — skips the detector (a file skipped as "could not determine")
-  --audio-track N         use audio track a:N instead of the auto-picked one (see: mlsubgen tracks FILE)
-  -t NAME                 force one translator for every language pair: {', '.join(TRANSLATORS)}
-                          (default: by pair — {', '.join(f'{a}→{b}: {m}' for (a, b), m in config.TRANSLATE_ROUTES.items())})
-  --asr auto|qwen|whisper default dual: Qwen3-ASR and whisper both decode every chunk and the translator LLM
-                          reconciles where they disagree; auto = one engine per chunk by language; qwen / whisper = one engine
-  --context "..."         what the programme is about, names, terms — helps both ASR and translation
-  --glossary names.tsv    source<TAB>target per line — pins names and terms
-  --keep-source           also write <video>.<lang>.srt with the transcript in the spoken language
-  --keep-work             keep the ASR cache after the .srt, to re-translate later without redoing the ASR
-  --subs ja | ignore      embedded subtitles: by default a text track in a target language means that target is
-                          done (nothing written), and a Japanese — else English/Chinese/Korean/Thai — text track is
-                          the transcript instead of the ASR; "ja" ignores embedded target tracks and makes our own
-                          translation, "ignore" always transcribes the audio
-  --no-recursive          stay in one folder          --dry-run   list what would be processed
+COMMANDS
+  subtitles   run        (default) subtitle the videos in the given files/folders
+              scan       detect the languages only — no ASR, nothing written; one line per file
+              bench      compare translators on one video or a clip:  mlsubgen bench VIDEO --clip 0:10:00-0:20:00
+  models      pull       download models: mlsubgen pull | pull gemma4 | pull some/ollama:tag | pull asr | pull --all
+              models     what is ready — translator presets in Ollama, ASR models in the Hugging Face cache
+              languages  the {len(config.LANG_NAMES)} subtitle languages: code, name, native name, which engine decodes it
+              tracks     the audio and subtitle tracks of a file, and which audio track would be used
+  queue       jobs       the queue of the worker service (--all for every job)
+              log ID · pause ID · resume ID · cancel ID · retry ID · purge [--done] [ID ...]
+              serve      the worker itself (normally started by mlsubgen-worker.service)
+  web         web        the browser front end over the queue: http://<this host>:{config.WEB_PORT}  (no login — LAN only)
+  care        clean      delete leftover work files and temp audio
+              compare    word-level agreement between two ASR results of one file (needs --keep-work)
+              selftest   exercise the text pipeline — no GPU needed
 
-How a run works — in rounds of --batch files (default 10), so subtitles appear every round
-  Stage 0, each file:   embedded subtitle tracks? a target-language track → that target is done; a source-language
-                        text track, else a <video>.<lang>.srt already beside the video → the transcript (no ASR).
-  Stage 1, the round:   ffmpeg → VAD → language detection per ~10 s of speech (whisper's probability + Qwen's
-                        auto decode + the script of the words; agreement without words counts for nothing; a
-                        second language needs {config.LID_SWITCH_MIN_WINDOWS} consecutive confident windows) → ≤ 30 s chunks of one
-                        language covering the WHOLE timeline (only stretches at the noise floor are skipped — the
-                        VAD misses dialogue over music, so it never decides what is decoded) → both engines decode
-                        each chunk with its language forced → the LLM reconciles the chunks where they disagree
-                        (timing inherited from the engines) → cues.
-  Stage 2, the round:   per target: cues in the target are copied through, the rest translated by the model for
-                        their language pair (one model loaded at a time) → typesetting → <video>.<target>.srt.
-  Skipped: a file whose dominant language is outside {', '.join(sorted(config.SOURCE_LANGS))}, or could not be determined —
-  with the reason in {config.LOG_DIR / 'skipped.log'}; --source LANG forces it through.
-  Interrupted?  Run mlsubgen again — finished detection, decoded ASR chunks and translation windows are reused;
-                the ASR of a half-done file continues at the chunk it reached (checkpointed after every chunk).
-  A skipped file is remembered and not re-checked; --source, --overwrite or --audio-track retries it.
-  Leftovers of old versions:  mlsubgen clean
+OPTIONS YOU WILL ACTUALLY USE (run)
+  --target en,th         subtitle languages to write, one .srt each (default {config.DEFAULT_TARGETS})
+  --source LANG          the audio IS this language — skips the detector (also rescues a file skipped as undetermined)
+  --audio-track N        use audio track a:N instead of the auto-picked one (see: mlsubgen tracks FILE)
+  -t NAME                one translator for every language pair: {', '.join(TRANSLATORS)}
+                         (default, by pair: {', '.join(f'{a}→{b} {m}' for (a, b), m in config.TRANSLATE_ROUTES.items())})
+  --model TAG            any Ollama model;   --backend openai --url http://host:port --model NAME   any OpenAI-compatible server
+  --asr MODE             dual (default: both engines on every chunk, the LLM reconciles) | auto (one engine per
+                         chunk by language) | qwen | whisper
+  --context "..."        what the programme is about, names, terms — biases both ASR and translation
+  --glossary FILE        source<TAB>target per line — pins names and terms;   --genre "..."   register hint
+  --subs ja | ignore     embedded subtitles: by default an embedded target-language text track means that target is
+                         done, and a spoken-language text track is the transcript (no ASR); ja = translate the
+                         embedded source track yourself even if a target track exists; ignore = always transcribe
+  --keep-source          also write the transcript in the spoken language as <video>.<lang>.srt
+  --keep-work            keep the ASR cache after the .srt (re-translate later with -t ... --overwrite, no ASR)
+  --no-recursive         stay in one folder      --dry-run   list what would be processed      --now   run here, not queued
 
-Long jobs — the mlsubgen-worker service (systemctl --user status mlsubgen-worker)
-  While the service is up, `mlsubgen` in a folder queues the job and returns at once; the worker runs queued jobs
-  one at a time, and a reboot only pauses them (every stage is checkpointed, a job resumes from its work files).
-  mlsubgen jobs                     the queue                mlsubgen log ID      the job's log (tail -f it)
-  mlsubgen cancel ID                stop one job             mlsubgen retry ID    queue a failed/cancelled/done job again
-  mlsubgen pause ID                 stop one job and hold it — it stays paused across reboots until  mlsubgen resume ID
-                                 (an --overwrite job carries on where it stopped: what it already rewrote is done)
-  mlsubgen purge [--done] [ID…]     drop failed/cancelled (or finished) jobs from the listing; logs stay
-  mlsubgen --now ...                run here instead of queueing (the worker waits while such a run holds the GPU)
-  systemctl --user stop mlsubgen-worker    pauses everything; jobs resume on start.  pkill only pauses for a minute.
+HOW A RUN WORKS   (rounds of --batch files, default 10, so subtitles appear every round)
+  1. embedded subtitles: a target-language text track → that target is done; a spoken-language text track → the transcript
+  2. ffmpeg → 16 kHz audio → language detection per ~10 s of speech (whisper's probability, Qwen's decode and the
+     script of the words all have to agree) → ≤ 30 s chunks of one language covering the whole timeline
+  3. both engines decode every chunk with its language forced; the translator LLM reconciles where they disagree
+  4. per target: cues already in the target are copied through, the rest translated in windows of 20 with context,
+     glossary and register rules → typesetting → <video>.<target>.srt
+  Interrupted? run it again: finished detection, decoded chunks and translated windows are reused.
+  A skipped file is remembered (reason in {config.LOG_DIR / 'skipped.log'}); --source, --overwrite or --audio-track retries it.
 
-Without the service (a run that survives the SSH session ending)
-  setsid nohup mlsubgen > {config.LOG_DIR}/run-$(date +%Y%m%d-%H%M).log 2>&1 < /dev/null &
-  tail -f {config.LOG_DIR}/run-*.log            watch it        pkill -INT -f 'python -m mlsubgen'     stop it
+THE QUEUE
+  While mlsubgen-worker.service is up, `mlsubgen` in a folder queues the job and returns; the worker runs jobs one
+  at a time, a reboot only pauses them, and `pause` holds a job across reboots until `resume`. `--now` runs in the
+  foreground instead. Each job's log: mlsubgen log ID.
+
+ENVIRONMENT
+  MLSUBGEN_TARGETS       default subtitle languages (comma list)        MLSUBGEN_LLM_URL   translator server (Ollama)
+  MLSUBGEN_MEDIA_ROOTS   folders the worker and the web picker may use (colon-separated)
+  MLSUBGEN_HOME          state: work files, logs, the queue               MLSUBGEN_WEB_HOST / MLSUBGEN_WEB_PORT
+  HF_HUB_OFFLINE=1       never contact huggingface.co (after `mlsubgen pull`)
+
+MORE   mlsubgen help COMMAND  ·  README.md  ·  https://github.com/dodgypast/mlsubgen
 """
 
 
@@ -1127,12 +1128,13 @@ def cmd_selftest(a: argparse.Namespace) -> int:
 
 # ── main ─────────────────────────────────────────────────────────────────────────────────────────────────
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="mlsubgen", description="Japanese audio in video files → English .srt, fully local",
-                                 epilog=HELP_TEXT, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(prog="mlsubgen", description="subtitles for videos, entirely on your own machine — "
+                                 "`mlsubgen help` for the guide, `mlsubgen help COMMAND` for a command's options",
+                                 usage="mlsubgen [run] [PATH ...] [options]  |  mlsubgen COMMAND [arguments]")
     ap.add_argument("--version", action="version", version=f"mlsubgen {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("run", help="produce <video>.en.srt for every video in the given folders (default: here, recursive)")
+    r = sub.add_parser("run", help="subtitle every video in the given files/folders: one <video>.<lang>.srt per target language")
     r.add_argument("paths", nargs="*", help="files or folders (default: the current folder)")
     r.add_argument("--no-recursive", action="store_true", help="do not descend into subfolders")
     r.add_argument("-t", "--translator", default=None, help=f"preset: {', '.join(TRANSLATORS)} (default {config.DEFAULT_TRANSLATOR})")
@@ -1194,7 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("-r", "--recursive", action="store_true")
     t.set_defaults(fn=cmd_tracks)
 
-    m = sub.add_parser("models", help="list translator presets and whether Ollama has them")
+    m = sub.add_parser("models", help="what is ready: the translator presets in Ollama and the ASR models in the Hugging Face cache")
     m.add_argument("--backend", default=None)
     m.add_argument("--url", default=None)
     m.set_defaults(fn=cmd_models)
@@ -1241,8 +1243,8 @@ def main(argv: list[str] | None = None) -> int:
     pg.set_defaults(fn=cmd_purge)
 
     args = list(sys.argv[1:] if argv is None else argv)
-    # `mlsubgen help` / `mlsubgen help <command>`
-    if args and args[0] in ("help", "?"):
+    # `mlsubgen help` / `mlsubgen --help` / `mlsubgen help <command>` / `mlsubgen <command> --help`
+    if args and args[0] in ("help", "?", "-h", "--help"):
         if len(args) > 1 and args[1] in sub.choices:
             sub.choices[args[1]].print_help()
         else:

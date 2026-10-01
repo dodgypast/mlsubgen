@@ -334,7 +334,7 @@ def create_app() -> FastAPI:
                       last_folder=last_folder(),
                       routes=[(f"{a}→{b}", m) for (a, b), m in config.TRANSLATE_ROUTES.items()],
                       sources=sorted(config.LANG_NAMES.items(), key=lambda kv: kv[1]),
-                      default_genre="a Japanese documentary / interview programme")
+                      default_genre="a documentary / interview programme")
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_page(request: Request, job_id: int):

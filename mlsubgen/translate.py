@@ -344,7 +344,7 @@ def untranslated(text: str, src: str, tgt: str) -> bool:
 
 
 def translate_cues(cues: list[Cue], client: LLMClient, glossary: dict[str, str] | None = None,
-                   genre: str = "a Japanese documentary / interview programme",
+                   genre: str = "a documentary / interview programme",
                    window_size: int = config.WINDOW_CUES, before_n: int = config.CONTEXT_BEFORE,
                    after_n: int = config.LOOKAHEAD_AFTER, progress: bool = True, checkpoint=None,
                    target: str = "en", pool: ClientPool | None = None, force_model: str | None = None) -> list[Cue]:
