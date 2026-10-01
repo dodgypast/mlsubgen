@@ -292,6 +292,8 @@ def stage_asr(job: Job, data: dict, engines: Engines, audio, chunks: list[Span],
     part, checkpoint = _partial(job, data, key)
     for name, cs in by_engine.items():
         _log(f"[asr] {name}: {len(cs)} chunk(s), languages {sorted({c.lang or '?' for c in cs})}")
+        if config.ASR_SEQUENTIAL:               # the 8gb profile: one engine on the card at a time
+            engines.release("whisper" if name == "qwen" else "qwen")
         w, lg = engines.get(name).transcribe(audio, cs, context=job.context, done=part.get(name), checkpoint=checkpoint(name))
         w, lg = retry_thin_chunks(engines, name, audio, cs, w, lg, spans, job.context)
         words += w
@@ -315,7 +317,11 @@ def _stage_asr_dual(job: Job, data: dict, engines: Engines, audio, chunks: list[
     solo = [c for c in chunks if c not in both]
     _log(f"[asr] dual: {len(both)} chunk(s) through both engines" + (f", {len(solo)} through whisper only" if solo else ""))
     part, checkpoint = _partial(job, data, key)
+    if config.ASR_SEQUENTIAL:                   # the 8gb profile: one engine on the card at a time
+        engines.release("whisper")
     qw, qlog = engines.qwen.transcribe(audio, both, context=job.context, done=part.get("qwen"), checkpoint=checkpoint("qwen")) if both else ([], [])
+    if config.ASR_SEQUENTIAL:
+        engines.release("qwen")
     ww, wlog = engines.whisper.transcribe(audio, both, context=job.context, done=part.get("whisper"), checkpoint=checkpoint("whisper")) if both else ([], [])
     sw, slog = engines.whisper.transcribe(audio, solo, context=job.context, done=part.get("solo"), checkpoint=checkpoint("solo")) if solo else ([], [])
     dual = []
@@ -382,6 +388,8 @@ def retry_thin_chunks(engines: Engines, name: str, audio, chunks: list[Span], wo
             thin.append((c, lg, sp))
     if not thin:
         return words, log
+    if config.ASR_SEQUENTIAL and other_name in ("qwen", "whisper"):
+        engines.release("whisper" if other_name == "qwen" else "qwen")     # the 8gb profile: swap, never stack
     other = engines.get(other_name) if (other_name != "whisper" or engines.whisper is not None) else None
     if other is None or getattr(other, "engine", other_name) == name:
         _log(f"[asr] ⚠ {len(thin)} chunk(s) came back thin from {name} and no other engine is available")

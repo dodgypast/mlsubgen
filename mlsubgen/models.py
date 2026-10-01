@@ -184,6 +184,7 @@ def status(url: str | None = None) -> dict:
         present, size = _cached(repo)
         asr.append({"name": label, "model": repo, "ready": present, "size": size, "pull": pulls.get(label)})
     return {"ollama": {"url": url, "reachable": tags is not None},
+            "profile": config.PROFILE, "vram_gb": config.VRAM_GB,
             "routes": [{"pair": f"{a}→{b}", "preset": m} for (a, b), m in config.TRANSLATE_ROUTES.items()],
             "translators": translators, "asr": asr,
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1", "active": any(p.get("state") in ("queued", "running") for p in pulls.values())}

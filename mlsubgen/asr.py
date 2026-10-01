@@ -212,13 +212,14 @@ class QwenASR:
 class WhisperASR:
     engine = "whisper"
 
-    def __init__(self, model_id: str = config.ASR_MODEL_WHISPER, device: str = "cuda", compute_type: str = "float16"):
+    def __init__(self, model_id: str = config.ASR_MODEL_WHISPER, device: str = "cuda", compute_type: str | None = None):
         import torch  # noqa: F401 — loads the bundled CUDA libraries (cuDNN, cuBLAS) that CTranslate2 links against
         from faster_whisper import WhisperModel
         self.model_id = model_id
+        compute_type = compute_type or config.WHISPER_COMPUTE      # int8_float16 on the small profiles: half the memory
         t0 = time.time()
         self.model = WhisperModel(model_id, device=device, compute_type=compute_type)
-        _log(f"[asr] loaded faster-whisper {model_id} in {time.time() - t0:.1f}s")
+        _log(f"[asr] loaded faster-whisper {model_id} ({compute_type}) in {time.time() - t0:.1f}s")
 
     def identify(self, piece: np.ndarray) -> tuple[str | None, float]:
         """(language code, probability) for a short piece — the LID's main detector."""
@@ -331,6 +332,17 @@ class Engines:
     @property
     def key(self) -> str:
         return f"{self.qwen_model}+{self.whisper_model}"
+
+    def release(self, name: str) -> None:
+        """Free one engine now (the 8gb profile never holds both); it reloads on its next use."""
+        if name == "qwen" and self._qwen is not None:
+            self._qwen.close(); self._qwen = None
+            _log("[asr] released qwen (sequential profile)")
+        elif name == "whisper" and self._whisper is not None:
+            self._whisper.close(); self._whisper = None
+            import torch
+            torch.cuda.empty_cache()
+            _log("[asr] released whisper (sequential profile)")
 
     def close(self) -> None:
         for e in (self._qwen, self._whisper):

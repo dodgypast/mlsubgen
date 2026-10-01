@@ -53,8 +53,79 @@ ASR_ROUTES = {"*": "whisper", **{lang: "qwen" for lang in ALIGNER_LANGS}}
 SOURCE_LANGS = set(LANG_NAMES)
 DEFAULT_TARGETS = os.environ.get("MLSUBGEN_TARGETS", "en")   # comma list of subtitle languages to write; --target overrides
                                                             # (the units / .env set it; "en,th" on the author's install)
-# (source, target) → translator preset; the most specific entry wins, "*" matches anything; -t forces one model
-TRANSLATE_ROUTES = {("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}
+# (source, target) → translator preset; the most specific entry wins, "*" matches anything; -t forces one model.
+# Filled in from the hardware profile below (apply_profile) — see PROFILES.
+TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
+
+# ── Hardware profiles (2026-10-02) ───────────────────────────────────────────────────────────────────────────
+# The ASR stage and the translation stage never share the GPU, so the card only has to hold the bigger of the two.
+#   full  ≥ 20 GB   both ASR engines resident (≈ 10 GB); 27–31B translators (17–19 GB)
+#   12gb  11–20 GB  both engines resident, whisper in int8 (≈ 8 GB); gemma4:12b-it-qat (7.2 GB)
+#   8gb   < 11 GB   one ASR engine at a time (Qwen ≈ 5 GB, then whisper int8 ≈ 2.5 GB); gemma4:e4b-it-qat (6.1 GB)
+# Picked from the GPU's memory at start (MLSUBGEN_PROFILE=auto), or forced: MLSUBGEN_PROFILE=12gb / --profile 12gb.
+# The smaller translators are weaker, especially for Japanese → English — `mlsubgen bench` shows by how much.
+PROFILES = {
+    "full": dict(min_vram_gb=20.0, routes={("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}, default="qwen3.8",
+                 whisper_compute="float16", asr_sequential=False),
+    "12gb": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-12b"}, default="gemma4-12b",
+                 whisper_compute="int8_float16", asr_sequential=False),
+    "8gb": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
+                whisper_compute="int8_float16", asr_sequential=True),
+}
+PROFILE = "full"                    # the active profile (set by apply_profile at import, below)
+DEFAULT_TRANSLATOR = "qwen3.8"      # the preset that reconciles the two ASR transcripts and stands in for a missing route
+WHISPER_COMPUTE = "float16"         # faster-whisper compute type (int8_float16 halves its memory)
+ASR_SEQUENTIAL = False              # True: never hold both ASR engines at once (reload per file instead)
+VRAM_GB: float | None = None        # what was detected
+
+
+def detect_vram_gb() -> float | None:
+    """The largest GPU's memory in GB via nvidia-smi, or None when there is no NVIDIA GPU to ask."""
+    import shutil
+    import subprocess
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10).stdout
+        sizes = [float(x) for x in out.split() if x.strip().replace(".", "").isdigit()]
+        return max(sizes) / 1024.0 if sizes else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def pick_profile(name: str | None, vram_gb: float | None) -> str:
+    """A profile name as given, or by memory ('auto'); no GPU information → 'full' (the historical defaults)."""
+    if name and name != "auto":
+        if name not in PROFILES:
+            raise ValueError(f"unknown profile {name!r}; profiles: {', '.join(PROFILES)}")
+        return name
+    if vram_gb is None:
+        return "full"
+    for prof in ("full", "12gb", "8gb"):
+        if vram_gb >= PROFILES[prof]["min_vram_gb"]:
+            return prof
+    return "8gb"
+
+
+def apply_profile(name: str | None = None) -> str:
+    """Make `name` (or MLSUBGEN_PROFILE / auto-detection) the active profile: routes, default translator, whisper
+    compute type, sequential ASR. Mutates the module's values in place, so every `config.X` reader sees it."""
+    global PROFILE, DEFAULT_TRANSLATOR, WHISPER_COMPUTE, ASR_SEQUENTIAL, VRAM_GB
+    want = name or os.environ.get("MLSUBGEN_PROFILE") or "auto"
+    if want == "auto" and VRAM_GB is None:
+        VRAM_GB = detect_vram_gb()
+    PROFILE = pick_profile(want, VRAM_GB)
+    p = PROFILES[PROFILE]
+    TRANSLATE_ROUTES.clear()
+    TRANSLATE_ROUTES.update(p["routes"])
+    DEFAULT_TRANSLATOR = p["default"]
+    WHISPER_COMPUTE = p["whisper_compute"]
+    ASR_SEQUENTIAL = p["asr_sequential"]
+    return PROFILE
+
+
+apply_profile()
 
 # ── Language identification (LID) — decide the language, then decode ───────────────────────────────────────
 LID_VERSION = DETECT_VERSION
@@ -151,8 +222,13 @@ TRANSLATORS: dict[str, Translator] = {
                                  note="TranslateGemma 27B q4_K_M, 17 GB — translation-only model"),
     # Fast MoE fallback: JP-TL-Bench LT 9.56 (above GPT-4o), ~3B active params.
     "qwen3-30b": Translator("qwen3-30b", "qwen3:30b-a3b-instruct-2507-q4_K_M", note="Qwen3-30B-A3B-Instruct-2507, ~18 GB, fast", think=False),
+    # Smaller cards (the 12gb / 8gb profiles). Dense Gemma 4 12B at 4-bit QAT; the E4B edge model; the 26B-A4B MoE
+    # for 16 GB cards (Ollama offloads part of it to the CPU below that).
+    "gemma4-12b": Translator("gemma4-12b", "gemma4:12b-it-qat", note="Gemma 4 12B QAT, 7.2 GB — the 12gb profile", think=False),
+    "gemma4-e4b": Translator("gemma4-e4b", "gemma4:e4b-it-qat", note="Gemma 4 E4B QAT, 6.1 GB — the 8gb profile", think=False),
+    "gemma4-26b": Translator("gemma4-26b", "gemma4:26b", note="Gemma 4 26B-A4B MoE, 16–19 GB — 16 GB cards", think=False),
 }
-DEFAULT_TRANSLATOR = "qwen3.8"
+# DEFAULT_TRANSLATOR is set by apply_profile() above (qwen3.8 on the full profile)
 
 # Japanese phrases Whisper-family and Qwen models emit over music/silence (the YouTube tail). Only applied when the
 # VAD says there was little or no speech under the cue.

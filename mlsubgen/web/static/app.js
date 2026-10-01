@@ -96,7 +96,8 @@ async function refreshModels() {
     <td>${x.ready || (x.pull && x.pull.state !== "error" && x.pull.state !== "done") ? "" : `<button class="secondary small" data-pull="${esc(x.name)}">pull</button>`}</td></tr>`;
   $("#models tbody").innerHTML = m.translators.map(x => row(x, "tl")).join("") + m.asr.map(x => row(x, "asr")).join("");
   const missing = [...m.translators.filter(x => !x.ready && m.routes.some(r => r.preset === x.name)), ...m.asr.filter(x => !x.ready)].length;
-  $("#models-note").textContent = (m.ollama.reachable ? "" : "Ollama unreachable · ") + (m.active ? "pulling…" : (missing ? `${missing} missing for a default run` : "all ready for a default run"))
+  $("#models-note").textContent = `profile ${m.profile}${m.vram_gb ? ` (${Math.round(m.vram_gb)} GB GPU)` : ""} · `
+    + (m.ollama.reachable ? "" : "Ollama unreachable · ") + (m.active ? "pulling…" : (missing ? `${missing} missing for a default run` : "all ready for a default run"))
     + (m.offline ? " · HF offline mode" : "");
   if (m.active) setTimeout(refreshModels, 2000);
 }

@@ -39,13 +39,26 @@ each stretch is transcribed with that language forced, and each of 45 target lan
 | | |
 |---|---|
 | OS | Linux (tested on Arch-family and Debian-family). No AMD, Apple or Windows path: the ASR engines are CUDA builds. |
-| GPU | NVIDIA, **12 GB** of VRAM for the ASR stage (Qwen3-ASR + aligner + whisper large-v3 together use about 10 GB), **24 GB** if you want the 27–31B translators below. Smaller cards: a smaller translator through Ollama. |
+| GPU | NVIDIA. **8 GB** is the floor; **24 GB** gets the full-quality setup. The hardware profile (below) adapts the pipeline to what the card has. |
 | Translator | [Ollama](https://ollama.com) on the same host (or any OpenAI-compatible server) with a model pulled — see Translators. |
 | Tools | `ffmpeg` / `ffprobe`; Python 3.12 and [uv](https://docs.astral.sh/uv/) for the host install, or Docker with the NVIDIA Container Toolkit. |
 | Disk | ~8 GB of models downloaded from Hugging Face on first run, plus the translator in Ollama (17–19 GB each). |
 
 The ASR engines and the translator never share the GPU: a run transcribes a round of files first, frees the
-card, then translates the round.
+card, then translates the round. So the card only has to hold the bigger of the two stages, and a **hardware
+profile**, picked from the GPU's memory at start, sets what each stage loads:
+
+| profile | GPU | ASR stage | translators |
+|---|---|---|---|
+| `full` | 20 GB and up | both engines resident (≈ 10 GB) | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair (17–19 GB each) |
+| `12gb` | 11–20 GB | both engines resident, whisper in int8 (≈ 8 GB) | `gemma4:12b-it-qat` (7.2 GB) for every pair |
+| `8gb` | under 11 GB | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB) | `gemma4:e4b-it-qat` (6.1 GB) for every pair |
+
+`mlsubgen models` shows the active profile; `MLSUBGEN_PROFILE=12gb` (or `--profile 12gb` on a run) forces one, and
+`mlsubgen pull` downloads what the active profile needs. The smaller translators are noticeably weaker, most of all
+for Japanese → English; `mlsubgen bench` shows by how much on your own material. On a 16 GB card the `12gb` profile
+applies; `-t gemma4-26b` tries the 26B-A4B mixture-of-experts (16–19 GB) there, with Ollama offloading part of it
+to the CPU.
 
 ## Install — Docker
 
@@ -123,6 +136,9 @@ Presets in `mlsubgen/config.py`; `mlsubgen models` shows which are pulled.
 | `gemma4` | `gemma4:31b-it-qat` (19 GB) | every other language pair (default route) |
 | `translategemma` | `translategemma:27b` (17 GB) | translation-only Gemma; fixed prompt |
 | `qwen3-30b` | `qwen3:30b-a3b-instruct-2507-q4_K_M` (18 GB) | the fast MoE fallback (~3 B active) |
+| `gemma4-12b` | `gemma4:12b-it-qat` (7.2 GB) | the `12gb` profile's translator |
+| `gemma4-e4b` | `gemma4:e4b-it-qat` (6.1 GB) | the `8gb` profile's translator |
+| `gemma4-26b` | `gemma4:26b` (16–19 GB) | 26B-A4B MoE for 16 GB cards (`-t gemma4-26b`) |
 
 `-t NAME` forces one preset for every pair; `--model TAG` any Ollama model; `--backend openai --url http://host:port
 --model NAME` any OpenAI-compatible server (llama-server, vLLM …). `mlsubgen bench VIDEO --clip 0:10:00-0:20:00`
@@ -160,6 +176,7 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 | `MLSUBGEN_TARGETS` | `en` | default subtitle languages |
 | `MLSUBGEN_LLM_URL` | `http://127.0.0.1:11434` | the translator server |
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
+| `MLSUBGEN_PROFILE` | `auto` | `full`, `12gb` or `8gb` — see Requirements |
 | `HF_HUB_OFFLINE` | `0` | `1` after the models are downloaded: no contact with huggingface.co |
 
 Everything else (chunk lengths, cue limits, line widths, reading speeds, hallucination patterns) is in
@@ -174,6 +191,8 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
   file is transcribed and translated instead of skipped.
 - The web UI has no authentication.
 - NVIDIA only.
+- The `12gb` and `8gb` profiles are new and lightly tested: the ASR side is the same code with less resident at
+  once, but the small translators have had far less use than the 27–31B ones. Reports welcome.
 
 ## Support and provenance
 

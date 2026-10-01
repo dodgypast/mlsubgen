@@ -14,6 +14,8 @@ Environment=MLSUBGEN_MEDIA_ROOTS=/path/to/your/videos
 Environment=MLSUBGEN_TARGETS=en
 # The translator server: Ollama on this machine, or any OpenAI-compatible server (--backend openai).
 Environment=MLSUBGEN_LLM_URL=http://127.0.0.1:11434
+# Hardware profile: auto (by the GPU's memory) | full | 12gb | 8gb — see `mlsubgen help`.
+Environment=MLSUBGEN_PROFILE=auto
 ExecStart=%h/mlsubgen/bin/mlsubgen serve
 Restart=always
 RestartSec=60

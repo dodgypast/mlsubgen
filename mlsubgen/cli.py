@@ -88,6 +88,9 @@ def clip_arg(text: str | None) -> tuple[float, float] | None:
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--profile", default=None, choices=["auto", *config.PROFILES],
+                   help="hardware profile: full (>= 20 GB GPU), 12gb, 8gb — translator routes, whisper precision and "
+                        "whether both ASR engines may be resident (default: MLSUBGEN_PROFILE, else by the GPU's memory)")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -205,11 +208,17 @@ THE QUEUE
   at a time, a reboot only pauses them, and `pause` holds a job across reboots until `resume`. `--now` runs in the
   foreground instead. Each job's log: mlsubgen log ID.
 
+HARDWARE PROFILES   (picked from the GPU's memory; MLSUBGEN_PROFILE=... or --profile ... forces one; active: {config.PROFILE})
+  full   20 GB and up   both ASR engines resident; 27–31B translators (qwen3.8:27b for ja→en, gemma4:31b for the rest)
+  12gb   11–20 GB       whisper in int8; gemma4:12b-it-qat (7.2 GB) for every pair
+  8gb    under 11 GB    one ASR engine on the card at a time; gemma4:e4b-it-qat (6.1 GB) for every pair
+  The smaller translators are weaker (most of all for Japanese → English): mlsubgen bench shows by how much.
+
 ENVIRONMENT
   MLSUBGEN_TARGETS       default subtitle languages (comma list)        MLSUBGEN_LLM_URL   translator server (Ollama)
   MLSUBGEN_MEDIA_ROOTS   folders the worker and the web picker may use (colon-separated)
   MLSUBGEN_HOME          state: work files, logs, the queue               MLSUBGEN_WEB_HOST / MLSUBGEN_WEB_PORT
-  HF_HUB_OFFLINE=1       never contact huggingface.co (after `mlsubgen pull`)
+  MLSUBGEN_PROFILE       auto (default) | full | 12gb | 8gb               HF_HUB_OFFLINE=1   never contact huggingface.co
 
 MORE   mlsubgen help COMMAND  ·  README.md  ·  https://github.com/dodgypast/mlsubgen
 """
@@ -255,6 +264,8 @@ def cmd_run(a: argparse.Namespace) -> int:
 
     if not a.now and not a.dry_run and (a.queue or worker.is_running()):
         return enqueue(a)
+    if a.profile:
+        config.apply_profile(a.profile)
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
     targets = parse_targets(a.target)
     source = a.source or ("ja" if a.assume_ja else None)
@@ -312,6 +323,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     routes = (f"all pairs → {force_model}" if force_model else
               ", ".join(f"{x}→{y}: {m}" for (x, y), m in config.TRANSLATE_ROUTES.items()))
     _log(f"mlsubgen {__version__}: {len(todo)} file(s) · targets {','.join(targets)} · asr={a.asr} · translators {routes}"
+         + f" · profile {config.PROFILE}" + (f" ({config.VRAM_GB:.0f} GB GPU)" if config.VRAM_GB else "")
          + (f" · source forced: {source}" if source else ""))
     if a.dry_run:
         for v, want in todo:
@@ -590,6 +602,8 @@ def cmd_scan(a: argparse.Namespace) -> int:
     videos = find_videos(a.paths or ["."], not a.no_recursive)
     if not videos:
         _log("no videos found"); return 1
+    if a.profile:
+        config.apply_profile(a.profile)
     engines = Engines(a.asr_model, a.whisper_model)
     counts: dict[str, int] = {}
     low: list[str] = []
@@ -792,6 +806,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
     video = Path(a.video).expanduser()
     if not video.is_file():
         _log(f"not found: {video}"); return 1
+    if a.profile:
+        config.apply_profile(a.profile)
     context = a.context or (Path(a.context_file).expanduser().read_text(encoding="utf-8").strip() if a.context_file else "")
     glossary = load_glossary(a.glossary)
     clip = clip_arg(a.clip)
@@ -896,6 +912,8 @@ def cmd_models(a: argparse.Namespace) -> int:
     from . import models
     st = models.status(a.url)
     o = st["ollama"]
+    print(f"profile: {config.PROFILE}" + (f" ({config.VRAM_GB:.0f} GB GPU detected)" if config.VRAM_GB else " (no GPU detected)")
+          + f" — MLSUBGEN_PROFILE or --profile to force one of: {', '.join(config.PROFILES)}")
     print(f"translators (Ollama at {o['url']}: {'reachable' if o['reachable'] else 'UNREACHABLE'}):")
     for t in st["translators"]:
         state = f"ready ({t['size'] / 1e9:.1f} GB)" if t["ready"] else "not pulled"
@@ -933,6 +951,22 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     from .translate import clean_en, parse_numbered
     from .vad import Span, make_chunks, speech_ratio
     import tempfile
+
+    # hardware profiles (2026-10-02): the thresholds, forcing, and what each profile sets; the route assertions
+    # below are written for the full profile, so it is made active here whatever card this runs on
+    assert config.pick_profile("auto", None) == "full" and config.pick_profile("auto", 24.0) == "full"
+    assert config.pick_profile("auto", 12.0) == "12gb" and config.pick_profile("auto", 8.0) == "8gb" and config.pick_profile("auto", 16.0) == "12gb"
+    assert config.pick_profile("8gb", 48.0) == "8gb"
+    try:
+        config.pick_profile("huge", None); raise AssertionError("an unknown profile must be rejected")
+    except ValueError:
+        pass
+    assert all(config.PROFILES[p]["default"] in TRANSLATORS and set(config.PROFILES[p]["routes"].values()) <= set(TRANSLATORS)
+               for p in config.PROFILES), "every profile's presets must exist"
+    config.apply_profile("8gb")
+    assert config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "int8_float16" and config.DEFAULT_TRANSLATOR == "gemma4-e4b"
+    config.apply_profile("full")
+    assert not config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "float16" and config.TRANSLATE_ROUTES[("ja", "en")] == "qwen3.8"
 
     # cues from words: sentence end, gap split, overflow
     words = [Word("今日は", 0.0, 0.4), Word("いい", 0.45, 0.6), Word("天気", 0.65, 0.9), Word("ですね。", 0.95, 1.3),
