@@ -28,8 +28,10 @@ each stretch is transcribed with that language forced, and each of 45 target lan
   in the target language is copied through, not translated.
 - **Subtitle typesetting** per language: line length by script, reading-speed ceilings (slower for CJK), minimum
   durations and gaps, cluster-safe line breaks for Thai, Lao, Khmer, Burmese and Devanagari.
-- **Embedded subtitles are respected**: a video that already carries full subtitles in a target language is left
-  alone, and a text track in the spoken language becomes the transcript — no GPU time spent.
+- **Embedded subtitles are used before the audio is**: a video that already carries full subtitles in a target
+  language is left alone for that target, and any other full text track in one of the 45 languages — not forced,
+  not signs-and-songs — becomes the transcript to translate from, the spoken language's track first. No ASR time
+  spent, and no translating a translation when the original is there.
 - **A job queue with a web UI**: jobs run one at a time on the GPU, survive reboots (every finished stage and
   every decoded ASR chunk is checkpointed), and can be paused and resumed. Pausing a job keeps it out of the
   queue across reboots until you resume it.
@@ -115,7 +117,7 @@ the language forced.
 
 | stage | what |
 |---|---|
-| embedded subs | a text track in a target language → that target is done; a text track in the spoken language (ASS cleaned of tags, karaoke and comments) → the transcript, no ASR |
+| embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR |
 | probe | `ffprobe` picks the audio track (tag, then title, then the default) — `mlsubgen tracks FILE` shows them, `--audio-track N` overrides |
 | audio | `ffmpeg` → 16 kHz mono wav (deleted after the file's ASR) |
 | language ID | per ~10 s of speech: whisper's probability + Qwen's decode + the script of the words; a second language needs consecutive confident windows |
@@ -187,8 +189,6 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
 - **Language detection on mixed material is the weakest link.** It has improved a lot (per-stretch detection, three
   sources of evidence) but a file with two languages in quick alternation can still get a stretch wrong; `--source`
   forces the language, and `mlsubgen scan` shows what the detector sees without running the ASR.
-- An embedded subtitle track in one of the languages added in 0.3.3 is not yet recognised as "already done" — the
-  file is transcribed and translated instead of skipped.
 - The web UI has no authentication.
 - NVIDIA only.
 - The `12gb` and `8gb` profiles are new and lightly tested: the ASR side is the same code with less resident at

@@ -1,7 +1,8 @@
 """Embedded subtitle tracks. A text track in a target language satisfies that target — it is left alone, no
-sidecar is written. A text track in a source language (Japanese first, else English/Chinese/Korean/Thai) is a
-better transcript than any ASR, so it replaces the VAD/ASR stages and goes straight to translation of the
-targets that are missing. Bitmap tracks (PGS, VobSub) would need OCR and are ignored."""
+sidecar is written. A non-forced, non-signs text track in any of the 45 languages we name is a better transcript
+than any ASR, so it replaces the VAD/ASR stages and goes straight to translation of the targets that are missing:
+the spoken language's track first (the audio tag), then Japanese, English and the rest. Bitmap tracks (PGS, VobSub)
+would need OCR and are ignored."""
 from __future__ import annotations
 
 import re
@@ -16,24 +17,37 @@ from .work import temp_beside
 
 MIN_CUES = 10                         # fewer than this is not a dialogue track
 PARTIAL_RE = re.compile(r"sign|song|forced|commentary|karaoke|lyric|caption only", re.I)
-# container language tags (ISO 639-2 B/T, 639-1, names) → our codes; a track titled in the language counts too
-LANG_TAGS = {"en": EN_TAGS, "ja": JA_TAGS, "th": {"tha", "th", "thai"}, "zh": {"zho", "chi", "zh", "chinese", "cmn"},
-             "ko": {"kor", "ko", "korean"}, "yue": {"yue", "cantonese"}, "de": {"ger", "deu", "de", "german"},
-             "fr": {"fre", "fra", "fr", "french"}, "es": {"spa", "es", "spanish"}, "it": {"ita", "it", "italian"},
-             "pt": {"por", "pt", "portuguese"}, "ru": {"rus", "ru", "russian"}, "id": {"ind", "id", "indonesian"},
-             "vi": {"vie", "vi", "vietnamese"}, "tr": {"tur", "tr", "turkish"}, "hi": {"hin", "hi", "hindi"},
-             "ar": {"ara", "ar", "arabic"}, "nl": {"dut", "nld", "nl", "dutch"}, "pl": {"pol", "pl", "polish"},
-             "cs": {"cze", "ces", "cs", "czech"}, "sv": {"swe", "sv", "swedish"}, "da": {"dan", "da", "danish"},
-             "fi": {"fin", "fi", "finnish"}, "no": {"nor", "nob", "nno", "no", "norwegian"}, "hu": {"hun", "hu", "hungarian"},
-             "ro": {"rum", "ron", "ro", "romanian"}, "el": {"gre", "ell", "el", "greek"}, "uk": {"ukr", "uk", "ukrainian"}}
-TITLE_WORDS = {"en": ("english",), "ja": ("japanese", "日本語"), "th": ("thai", "ไทย"), "zh": ("chinese", "中文", "简体", "繁體"),
-               "ko": ("korean", "한국어"), "de": ("german", "deutsch"), "fr": ("french", "français"), "es": ("spanish", "español"),
-               "it": ("italian", "italiano"), "pt": ("portuguese", "português"), "ru": ("russian", "русский"),
-               "nl": ("dutch", "nederlands"), "vi": ("vietnamese", "tiếng việt"), "id": ("indonesian", "bahasa"),
-               "tr": ("turkish", "türkçe"), "ar": ("arabic", "العربية"), "hi": ("hindi", "हिन्दी"), "pl": ("polish", "polski"),
-               "cs": ("czech", "čeština"), "sv": ("swedish", "svenska"), "da": ("danish", "dansk"), "fi": ("finnish", "suomi"),
-               "no": ("norwegian", "norsk"), "hu": ("hungarian", "magyar"), "ro": ("romanian", "română"),
-               "el": ("greek", "ελληνικά"), "uk": ("ukrainian", "українська")}
+# container language tags (ISO 639-2 B/T, 639-1, names) → our codes — every one of config.LANG_NAMES (2026-10-02;
+# the 17 languages added in 0.3.3 were missing, so their tracks were neither "already done" nor a transcript)
+_ISO3 = {"en": "eng", "ja": "jpn", "th": "tha", "zh": "zho chi cmn", "ko": "kor", "yue": "yue", "de": "ger deu",
+         "fr": "fre fra", "es": "spa", "it": "ita", "pt": "por", "ru": "rus", "id": "ind", "vi": "vie", "tr": "tur",
+         "hi": "hin", "ar": "ara", "nl": "dut nld", "pl": "pol", "cs": "cze ces", "sv": "swe", "da": "dan", "fi": "fin",
+         "no": "nor nob nno", "hu": "hun", "ro": "rum ron", "el": "gre ell", "uk": "ukr", "ms": "may msa", "tl": "tgl fil",
+         "fa": "per fas", "he": "heb", "bn": "ben", "ta": "tam", "km": "khm", "lo": "lao", "my": "bur mya", "ca": "cat",
+         "bg": "bul", "hr": "hrv scr", "sk": "slo slk", "sl": "slv", "lt": "lit", "lv": "lav", "et": "est"}
+LANG_TAGS: dict[str, set[str]] = {code: {code, config.LANG_NAMES[code].lower(), *(_ISO3.get(code, "").split())}
+                                  for code in config.LANG_NAMES}
+LANG_TAGS["ja"] |= JA_TAGS
+LANG_TAGS["en"] |= EN_TAGS
+# a track titled in the language counts too: the English name, the language's own name, and a few common extras
+_TITLE_EXTRA = {"zh": ("中文", "简体", "繁體", "繁体"), "id": ("bahasa",), "tl": ("tagalog", "filipino"), "fa": ("farsi", "persian"),
+                "my": ("myanmar", "burmese"), "no": ("bokmål", "nynorsk")}
+TITLE_WORDS: dict[str, tuple[str, ...]] = {
+    code: tuple(dict.fromkeys((config.LANG_NAMES[code].lower(), config.NATIVE_NAMES.get(code, "").lower(), *_TITLE_EXTRA.get(code, ()))))
+    for code in config.LANG_NAMES}
+TITLE_WORDS["id"] = ("indonesian", "bahasa indonesia", "bahasa")      # "bahasa" alone is Indonesian by convention; Malay has its own name
+TITLE_WORDS["ms"] = ("malay", "bahasa melayu")
+
+
+def code_for_tag(tag: str | None) -> str | None:
+    """A container language tag (jpn, ja, japanese, …) → our code, or None for und / unknown."""
+    tag = (tag or "").strip().lower()
+    if not tag or tag == "und":
+        return None
+    for code, tags in LANG_TAGS.items():
+        if tag in tags:
+            return code
+    return None
 
 _ASS_TAG = re.compile(r"\{[^}]*\}")                           # {\an8}{\i1}… override tags that survive conversion
 _SPEAKER = re.compile(r"^[（(][^）)]{1,12}[)）]")                # （田中）こんにちは — closed-caption speaker labels
@@ -174,21 +188,30 @@ def extract_track(video: Path, s_index: int, out: Path, codec: str | None = None
     return len(cues)
 
 
-# which embedded track becomes the transcript: Japanese first, then the common ones, then every other language we name
+# Which embedded track becomes the transcript, when it is not in a target language: the spoken language first
+# (the audio track's tag — the only transcript that is not already a translation), then, for untagged audio, the
+# old order: Japanese (a Japanese text track almost always means Japanese audio), English (the pivot the
+# translators do best from), Chinese, Korean, Thai, then every other language we name.
 SOURCE_ORDER = ("ja", "en", "zh", "ko", "th") + tuple(l for l in config.LANG_NAMES if l not in ("ja", "en", "zh", "ko", "th"))
 
 
-def plan_embedded(subs: list[SubTrack], targets: list[str], mode: str) -> tuple[list[str], tuple[SubTrack, str] | None]:
+def source_order(spoken: str | None) -> tuple[str, ...]:
+    return ((spoken,) if spoken else ()) + tuple(l for l in SOURCE_ORDER if l != spoken)
+
+
+def plan_embedded(subs: list[SubTrack], targets: list[str], mode: str,
+                  spoken: str | None = None) -> tuple[list[str], tuple[SubTrack, str] | None]:
     """(targets already embedded as text tracks, the text track to use as the transcript + its language).
-    mode auto: both; mode ja: embedded target tracks are ignored (we make our own translation) but a source track
-    still replaces the ASR; mode ignore: nothing."""
+    Any non-forced, non-signs text track in one of our 45 languages qualifies as a transcript; `spoken` (the audio
+    track's language, when tagged) is preferred. mode auto: both; mode ja: embedded target tracks are ignored (we
+    make our own translation) but a source track still replaces the ASR; mode ignore: nothing."""
     if mode == "ignore" or not subs:
         return [], None
     satisfied = [t for t in targets if mode == "auto" and pick(subs, t)]
     remaining = [t for t in targets if t not in satisfied]
     if not remaining:
         return satisfied, None
-    for lang in SOURCE_ORDER:
+    for lang in source_order(spoken):
         if lang in remaining:
             continue
         t = pick(subs, lang)
@@ -197,17 +220,18 @@ def plan_embedded(subs: list[SubTrack], targets: list[str], mode: str) -> tuple[
     return satisfied, None
 
 
-def plan_sources(video: Path, subs: list[SubTrack], targets: list[str], mode: str) -> tuple[list[str], tuple[object, str] | None]:
+def plan_sources(video: Path, subs: list[SubTrack], targets: list[str], mode: str,
+                 spoken: str | None = None) -> tuple[list[str], tuple[object, str] | None]:
     """plan_embedded, then sidecar files: a <video>.<lang>.srt beside the video in a source language (ours from an
     earlier run, or anyone's) is a timed transcript too — the missing targets are translated from it instead of
     transcribing the audio again. The source is (SubTrack, lang) or (Path, lang); mode ignore = audio only."""
-    satisfied, source = plan_embedded(subs, targets, mode)
+    satisfied, source = plan_embedded(subs, targets, mode, spoken)
     if source is not None or mode == "ignore":
         return satisfied, source
     remaining = [t for t in targets if t not in satisfied]
     if not remaining:
         return satisfied, None
-    for lang in SOURCE_ORDER:
+    for lang in source_order(spoken):
         if lang in remaining:
             continue                                     # being (re)made now — not a source
         side = video.with_name(f"{video.stem}.{lang}.srt")
@@ -226,7 +250,7 @@ def clean_ja_line(line: str) -> str:
 def cues_from_track(srt_path: Path, lang: str = "ja") -> list[Cue]:
     """Subtitle file → source cues with the track's own timings. Display lines are joined without spaces for
     Japanese/Chinese/Thai and with spaces otherwise; CC speaker labels and sound-effect-only lines go."""
-    joiner = "" if lang in ("ja", "zh", "yue", "th") else " "
+    joiner = "" if lang in ("ja", "zh", "yue", "th", "km", "lo", "my") else " "    # scripts without word spaces
     cues: list[Cue] = []
     for c in read_srt(srt_path):
         parts = [clean_ja_line(line) for line in c.text.splitlines()]

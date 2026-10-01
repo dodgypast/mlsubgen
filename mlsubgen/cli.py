@@ -258,7 +258,7 @@ def cmd_run(a: argparse.Namespace) -> int:
                            stage_asr, stage_audio, stage_cues, stage_lid, stage_merge, stage_subs, stage_translate)
     from .probe import probe
     from .segment import Cue
-    from .subs import pick, plan_sources
+    from .subs import code_for_tag, pick, plan_sources
     from .translate import ClientPool, route
     from .vad import cover_chunks
 
@@ -387,7 +387,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         pr = probe(job.video, job.audio_track)
         if pr.chosen is None:
             return None
-        satisfied, source = plan_sources(job.video, pr.subs, job.targets, a.subs)
+        satisfied, source = plan_sources(job.video, pr.subs, job.targets, a.subs, code_for_tag(pr.chosen.language))
         if source is not None or len(satisfied) == len(job.targets):
             return None                                     # the text route needs no audio
         return extract_wav(job.video, pr.chosen.index, job.wav, None, None, pr.chosen.duration or pr.duration)
@@ -1137,6 +1137,26 @@ def cmd_selftest(a: argparse.Namespace) -> int:
            "Comment: 0,0:00:02.00,0:00:08.00,Default,,0,0,0,,private\n")
     ac = ass_to_cues(ass)
     assert [(c.start, c.end, c.text) for c in ac] == [(2.0, 8.0, "The town zoo\nis busy")], [(c.start, c.end, c.text) for c in ac]
+    # embedded tracks in every language (2026-10-02): tags and titles of the 0.3.3 languages are recognised, forced
+    # and signs tracks never count, and the spoken language's track is the transcript before any other
+    from .probe import SubTrack as _ST
+    from .subs import LANG_TAGS as _LT, code_for_tag, pick as _pick, plan_embedded
+    assert all(c in _LT for c in config.LANG_NAMES) and code_for_tag("tgl") == "tl" and code_for_tag("khm") == "km"
+    assert code_for_tag("JPN") == "ja" and code_for_tag("und") is None and code_for_tag("xx") is None
+    tracks = [_ST(0, 2, "khm", "", "subrip", True, False, False), _ST(1, 3, "und", "Bahasa Melayu", "ass", True, False, False),
+              _ST(2, 4, "eng", "Signs & Songs", "ass", True, False, False), _ST(3, 5, "eng", "", "subrip", True, True, False),
+              _ST(4, 6, "spa", "", "subrip", True, False, False), _ST(5, 7, "jpn", "", "hdmv_pgs_subtitle", False, False, False)]
+    assert _pick(tracks, "km").index == 0 and _pick(tracks, "ms").index == 1, "tag and title of the new languages"
+    assert _pick(tracks, "en") is None, "a signs track and a forced track are not English subtitles"
+    assert _pick(tracks, "ja") is None, "a bitmap track is unusable"
+    sat, src = plan_embedded(tracks, ["en", "th"], "auto", spoken="es")
+    assert sat == [] and src and src[1] == "es", "the spoken language's track is the transcript"
+    sat, src = plan_embedded(tracks, ["en", "th"], "auto", spoken="km")
+    assert src and src[1] == "km", "a Khmer audio tag picks the Khmer track"
+    sat, src = plan_embedded(tracks, ["en", "th"], "auto", spoken=None)
+    assert src and src[1] == "es", "untagged audio: the first usable track in the fixed order (Spanish precedes Khmer)"
+    sat, src = plan_embedded(tracks, ["km", "th"], "auto", spoken="es")
+    assert sat == ["km"] and src and src[1] == "es", "an embedded target counts as done; the rest come from the spoken track"
     # models: Ollama's pull stream parses, names resolve to the right kind of download, status needs no server
     from . import models as _models
     assert _models.parse_pull_line('{"status":"pulling abc","total":100,"completed":40}') == (40, 100, "pulling abc", False)
@@ -1186,7 +1206,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="files per round of ASR-then-translate (default 10); 0 = ASR every file first, then translate every file")
     r.add_argument("--subs", default="auto", choices=["auto", "ja", "ignore"],
                    help="embedded subtitle tracks: auto = a target language that is embedded as a text track is left alone "
-                        "(no .srt written) and a source-language text track (Japanese first, else English/Chinese/Korean/Thai) "
+                        "(no .srt written) and any other full text track (not forced/signs; the spoken language's first) "
                         "is the transcript; ja = ignore embedded target tracks, make our own translation; ignore = always ASR")
     r.add_argument("--overwrite", action="store_true", help="rewrite an existing .srt")
     r.add_argument("--since", type=float, default=None, metavar="EPOCH",

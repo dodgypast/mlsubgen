@@ -17,7 +17,7 @@ from .clean import filter_cues
 from .probe import ProbeResult, describe_tracks, probe
 from .segment import Cue, build_cues, normalise_timing
 from .srt import typeset, write_srt
-from .subs import MIN_CUES, cues_from_track, extract_track, pick, plan_sources
+from .subs import MIN_CUES, code_for_tag, cues_from_track, extract_track, pick, plan_sources
 from .translate import ClientPool, translate_cues
 from .vad import Span, speech_spans
 
@@ -81,7 +81,8 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
     if mode == "ignore":
         return [], None
     pr = probe(job.video, job.audio_track)
-    satisfied, source = plan_sources(job.video, pr.subs, targets, mode)
+    spoken = code_for_tag(pr.chosen.language) if pr.chosen else None     # the audio tag: prefer a track in that language
+    satisfied, source = plan_sources(job.video, pr.subs, targets, mode, spoken)
     for t in satisfied:
         track = pick(pr.subs, t)
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are embedded (s:{track.index} {track.codec}"
