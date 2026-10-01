@@ -1050,6 +1050,43 @@ def _merge_gap(items: list[tuple[float, float]], gap: float) -> list[tuple[float
     return out
 
 
+def _pgs_intervals(video: Path, index: int) -> list[tuple[float, float]]:
+    """The on-screen intervals of a bitmap (PGS) subtitle track, without OCR: a display set whose presentation
+    composition carries one or more objects puts a subtitle up, one with no objects takes it down. Enough for a
+    forced track to serve as "foreign speech here" (2026-10-01: a UHD release with 30 bitmap tracks and no text)."""
+    import subprocess
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".sup", delete=False) as f:
+        sup = Path(f.name)
+    try:
+        subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(video), "-map", f"0:s:{index}", "-c", "copy",
+                        "-f", "sup", str(sup)], check=True, capture_output=True)
+        data = sup.read_bytes()
+    finally:
+        sup.unlink(missing_ok=True)
+    out: list[tuple[float, float]] = []
+    open_at: float | None = None
+    pos = 0
+    while pos + 13 <= len(data):
+        if data[pos:pos + 2] != b"PG":
+            pos += 1
+            continue
+        pts = int.from_bytes(data[pos + 2:pos + 6], "big") / 90000.0
+        seg_type = data[pos + 10]
+        size = int.from_bytes(data[pos + 11:pos + 13], "big")
+        payload = data[pos + 13:pos + 13 + size]
+        if seg_type == 0x16 and len(payload) >= 11:           # presentation composition segment
+            n_objects = payload[10]
+            if n_objects > 0 and open_at is None:
+                open_at = pts
+            elif n_objects == 0 and open_at is not None:
+                if pts > open_at:
+                    out.append((open_at, pts))
+                open_at = None
+        pos += 13 + size
+    return out
+
+
 def _switches(truth_blocks: list[tuple[float, float]], our_blocks: list[tuple[float, float]],
               tol: float = 3.0, far: float = 5.0) -> dict:
     """Language changes: every block edge is a switch (into the foreign language at its start, back at its end).
@@ -1092,24 +1129,31 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
         config.apply_profile(a.profile)
     clip = clip_arg(a.clip)
     pr = probe(video, a.audio_track)
+    from types import SimpleNamespace
     if a.reference:
         ref = read_srt(Path(a.reference).expanduser())
         where = Path(a.reference).name
     else:
-        tracks = [t for t in pr.subs if t.is_text]
+        tracks = list(pr.subs)
         if a.forced_track is not None:
             tracks = [t for t in tracks if t.index == a.forced_track]
         else:
             tracks = [t for t in tracks if getattr(t, "forced", False) or "forced" in (t.title or "").lower()]
+        # a text forced track first; a bitmap one still gives the timings (no OCR needed for "foreign speech here")
+        tracks.sort(key=lambda t: 0 if t.is_text else 1)
         if not tracks:
             _log("no forced subtitle track found — pass --forced-track N (see `mlsubgen tracks`) or --reference forced.srt")
             _log(describe_tracks(pr)); return 1
         t = tracks[0]
-        tmp = config.TMP_DIR / f"{video.stem[:60]}.forced.srt"
-        tmp.parent.mkdir(parents=True, exist_ok=True)
-        n = extract_track(video, t.index, tmp, t.codec)
-        ref = read_srt(tmp)
-        where = f"s:{t.index} {t.codec}{', ' + t.title if t.title else ''} ({n} raw cues)"
+        if t.is_text:
+            tmp = config.TMP_DIR / f"{video.stem[:60]}.forced.srt"
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            n = extract_track(video, t.index, tmp, t.codec)
+            ref = read_srt(tmp)
+            where = f"s:{t.index} {t.codec}{', ' + t.title if t.title else ''} ({n} raw cues)"
+        else:
+            ref = [SimpleNamespace(start=s, end=e, text="") for s, e in _pgs_intervals(video, t.index)]
+            where = f"s:{t.index} {t.codec} (bitmap — timings only, no OCR){', ' + t.title if t.title else ''} ({len(ref)} display sets)"
     if clip:
         ref = [c for c in ref if c.end > clip[0] and c.start < clip[1]]
         for c in ref:

@@ -212,7 +212,9 @@ SPEAKER_SEGMENTATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/downl
 SPEAKER_SEGMENTATION_FILE = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"   # pyannote segmentation-3.0, MIT
 SPEAKER_EMBEDDING_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 SPEAKER_EMBEDDING_FILE = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"   # 3D-Speaker ERes2Net, Apache-2.0
-SPEAKER_THRESHOLD = 0.5        # clustering threshold when the speaker count is not given: smaller = more speakers
+SPEAKER_THRESHOLD = 1.0        # clustering threshold when the speaker count is not given: smaller = more speakers.
+                               # 2026-10-01 sweep on a ten-minute anime clip: 0.5 → 80 clusters, 0.8 → 31, 1.0 → 14 with a
+                               # plausible share per voice, 1.1 → 8; cue-boundary agreement was the same (48–49 %) throughout
 SPEAKER_MIN_ON = 0.3           # a speaker turn shorter than this is dropped
 SPEAKER_MIN_OFF = 0.5          # a gap shorter than this does not end a turn
 SPEAKER_MIN_OVERLAP = 0.6      # a word takes a speaker only when that speaker covers this share of it (and twice the runner-up)
