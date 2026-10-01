@@ -205,7 +205,10 @@ def stage_lid(job: Job, data: dict, audio, spans: list[Span], engines: Engines, 
         work.save(job.work_file, data)
         _log(f"[lid] {res.summary()}")
         return res
-    mode = job.speakers if turns else "off"
+    # the cache key names everything the turns depend on — mode, threshold AND embedding model (2026-10-02: an
+    # embedding comparison returned the first model's verdicts five times because the key held only the mode)
+    mode = (f"{job.speakers}|{job.speaker_threshold or config.SPEAKER_THRESHOLD}|{config.SPEAKER_EMBEDDING_FILE}"
+            if turns else "off")
     cached = data.get("lid")
     if cached and cached.get("version") == config.LID_VERSION and not cached.get("forced") \
             and cached.get("speakers", "off") == mode:
