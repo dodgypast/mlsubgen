@@ -313,18 +313,29 @@ def build_windows(spans: list[Span], min_speech: float = config.LID_WINDOW_SPEEC
     cur: list[int] = []
     speech = 0.0
 
+    def voice() -> str:
+        """The window's speaker: the voice with most speech in it (one voice, normally; a tiny opening piece of
+        another voice may be inside — see below)."""
+        tally: dict[str, float] = {}
+        for i in cur:
+            tally[spans[i].speaker] = tally.get(spans[i].speaker, 0.0) + spans[i].dur
+        return max(tally, key=tally.get) if tally else ""
+
     def close() -> None:
-        out.append(Window(spans[cur[0]].start, spans[cur[-1]].end, speech, cur, speaker=spans[cur[0]].speaker))
+        out.append(Window(spans[cur[0]].start, spans[cur[-1]].end, speech, cur, speaker=voice() if by_speaker else ""))
 
     for i, s in enumerate(spans):
-        if cur and (speech >= min_speech or s.end - spans[cur[0]].start > max_audio
-                    or (by_speaker and s.speaker != spans[cur[0]].speaker)):
+        # a change of voice closes the window — once it holds LID_SPEAKER_WINDOW_MIN_SPEECH of speech: a window of
+        # a second or two is too short to judge, and a stream of them invented switches (0.4.5)
+        voice_change = by_speaker and s.speaker != spans[cur[-1]].speaker and speech >= config.LID_SPEAKER_WINDOW_MIN_SPEECH \
+            if cur else False
+        if cur and (speech >= min_speech or s.end - spans[cur[0]].start > max_audio or voice_change):
             close()
             cur, speech = [], 0.0
         cur.append(i)
         speech += s.dur
     if cur:
-        same = not by_speaker or (out and spans[cur[0]].speaker == out[-1].speaker)
+        same = not by_speaker or (out and voice() == out[-1].speaker)
         if out and speech < min_speech / 3 and same:          # a tiny tail joins the previous window
             out[-1].spans += cur; out[-1].end = spans[cur[-1]].end; out[-1].speech += speech
         else:
@@ -380,11 +391,14 @@ def sample_indices(n: int, k: int) -> list[int]:
 
 
 def smooth(langs: list[str | None], confident: list[bool], min_run: int = config.LID_SWITCH_MIN_WINDOWS,
-           margins: list[float] | None = None, speakers: list[str] | None = None) -> list[str | None]:
+           margins: list[float] | None = None, speakers: list[str] | None = None,
+           speech: list[float] | None = None) -> list[str | None]:
     """Uncertain windows inherit the nearest confident neighbour; a confident run shorter than `min_run` of a language
     other than the dominant one is absorbed (it is a stray phrase, not a scene) — unless every window of the run
     is strongly evidenced (margin ≥ LID_STRONG_MARGIN: both detectors agreeing on real words). A strongly evidenced
-    switch is never blocked (LID v3: a single ten-second exchange in a third language used to vanish)."""
+    switch is never blocked (LID v3: a single ten-second exchange in a third language used to vanish).
+    With `speech` (seconds per window — speaker-aware windows vary in size, so counting them means nothing) a run
+    survives on duration instead: LID_SWITCH_MIN_SPEECH seconds, or strong evidence over LID_STRONG_MIN_SPEECH."""
     n = len(langs)
     if n == 0:
         return []
@@ -402,7 +416,12 @@ def smooth(langs: list[str | None], confident: list[bool], min_run: int = config
             while j < n and confident[j] and out[j] == out[i]:
                 j += 1
             strong = all(margins[k] >= config.LID_STRONG_MARGIN for k in range(i, j))
-            if j - i < min_run and not strong:
+            if speech is None:
+                keep = j - i >= min_run or strong
+            else:
+                sec = sum(speech[i:j])
+                keep = sec >= config.LID_SWITCH_MIN_SPEECH or (strong and sec >= config.LID_STRONG_MIN_SPEECH)
+            if not keep:
                 for k in range(i, j):
                     out[k] = dominant
             i = j
@@ -489,7 +508,8 @@ def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool =
             notes.append(f"speaker priors for {len(priors)} voice(s) settled {settled} uncertain window(s)"
                          + (f"; {mixed} window(s) of voices with no single language" if mixed else ""))
     labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged],
-                    speakers=[w.speaker for w in judged] if by_speaker else None)
+                    speakers=[w.speaker for w in judged] if by_speaker else None,
+                    speech=[w.speech for w in judged] if by_speaker else None)
     # every window gets a label: unjudged ones (monolingual sample) take the nearest judged neighbour's
     label_at = {id(w): l for w, l in zip(judged, labels)}
     final: list[str | None] = []

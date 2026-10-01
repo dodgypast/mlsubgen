@@ -177,9 +177,10 @@ def apply_profile(name: str | None = None) -> str:
 apply_profile()
 
 # ── Language identification (LID) — decide the language, then decode ───────────────────────────────────────
-LID_VERSION = 3                # v3 (2026-10-01): function-word evidence for Latin-script languages, strongly evidenced
-                               # single windows survive the smoothing, switch points refined to the exact span. Cached
-                               # v2 verdicts are redone; remembered skips are keyed by DETECT_VERSION and are not
+LID_VERSION = 4                # v3 (2026-10-01): function-word evidence for Latin-script languages, strongly evidenced
+                               # single windows survive the smoothing, switch points refined to the exact span. v4: the
+                               # speaker-aware window and run rules (0.4.5). Cached older verdicts are redone; remembered
+                               # skips are keyed by DETECT_VERSION and are not
 LID_STRONG_MARGIN = 0.6        # a non-dominant run shorter than LID_SWITCH_MIN_WINDOWS survives when every window's margin is ≥ this
 # speaker-aware detection (0.4.4, with --speakers): spans cut at speaker turns, a window is one voice, every voice
 # sampled, and a voice's language history is evidence for its uncertain windows — never for its confident ones
@@ -188,6 +189,12 @@ LID_PRIOR_MIN_SPEECH = 8.0     # a voice needs this much confidently labelled sp
 LID_PRIOR_STRONG = 0.5         # the prior's weight when one language is ≥ 90 % of the voice's confident speech …
 LID_PRIOR_WEAK = 0.25          # … ≥ 65 %; below that a voice is bilingual and has no prior at all
 LID_SAME_SPEAKER_REACH = 6     # an uncertain window inherits from a confident window of its own voice this many windows away
+# 0.4.5: the first speaker-aware run fragmented (142–157 "voices" on a feature film, windows of three seconds) and
+# invented switches; a voice change only closes a window that already holds some speech, and a short run of
+# another language is judged by its seconds, not by how many (variable-sized) windows it spans
+LID_SPEAKER_WINDOW_MIN_SPEECH = 3.0   # a change of voice closes the window only once it holds this much speech
+LID_SWITCH_MIN_SPEECH = 8.0           # a run of another language survives on this much speech …
+LID_STRONG_MIN_SPEECH = 4.0           # … or on strong evidence over at least this much
 LID_WINDOW_SPEECH_SEC = 10.0   # a detection window = consecutive VAD spans until this much SPEECH (not audio)
 LID_WINDOW_MAX_AUDIO_SEC = 30.0
 LID_SAMPLE_WINDOWS = 24        # first pass: this many windows spread over the file; every window if a 2nd language shows

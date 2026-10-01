@@ -1522,6 +1522,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     sp3 = [Span(0.0, 3.0, speaker="S1"), Span(3.5, 6.5, speaker="S1"), Span(7.0, 10.0, speaker="S2")]
     assert [w.speaker for w in lid.build_windows(sp3, by_speaker=True)] == ["S1", "S2"], "a change of voice closes the window"
     assert len(lid.build_windows(sp3)) == 1, "without speakers the three spans are one window"
+    # 0.4.5: a voice change does not close a window of a second or two; the window's speaker is its main voice
+    tiny = lid.build_windows([Span(0.0, 1.0, speaker="S1"), Span(1.2, 6.2, speaker="S2"), Span(6.5, 9.5, speaker="S2")], by_speaker=True)
+    assert len(tiny) == 1 and tiny[0].speaker == "S2", [(w.speaker, w.speech) for w in tiny]
+    assert lid.smooth(["en", "fr", "en", "en"], [True] * 4, margins=[0.9] * 4, speakers=["S1", "S2", "S1", "S1"], speech=[10, 2, 10, 10]) \
+        == ["en", "en", "en", "en"], "two seconds of a strong other language: absorbed"
+    assert lid.smooth(["en", "fr", "en", "en"], [True] * 4, margins=[0.9] * 4, speakers=["S1", "S2", "S1", "S1"], speech=[10, 5, 10, 10]) \
+        == ["en", "fr", "en", "en"], "five strong seconds: kept"
+    assert lid.smooth(["en", "fr", "fr", "en"], [True] * 4, margins=[0.3] * 4, speakers=["S1", "S2", "S2", "S1"], speech=[10, 5, 5, 10]) \
+        == ["en", "fr", "fr", "en"], "ten weak seconds: kept on duration"
     wins = [lid.Window(0, 1, 20.0, [], lang="ja", confident=True, speaker="S1"),
             lid.Window(0, 1, 6.0, [], lang="ja", confident=True, speaker="S2"), lid.Window(0, 1, 4.0, [], lang="en", confident=True, speaker="S2"),
             lid.Window(0, 1, 7.0, [], lang="en", confident=True, speaker="S3"), lid.Window(0, 1, 2.0, [], lang="ja", confident=True, speaker="S3"),
