@@ -98,6 +98,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
                         "(labels are hints, never written to the subtitles). Default off")
     p.add_argument("--speaker-threshold", type=float, default=None,
                    help=f"clustering threshold for --speakers auto (default {config.SPEAKER_THRESHOLD}; smaller = more speakers)")
+    p.add_argument("--speaker-embedding", default=None, metavar="FILE",
+                   help="the speaker embedding model (a file from sherpa-onnx's speaker-recongition-models release; "
+                        "`mlsubgen pull speakers` fetches it). See config.py for the known ones")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -142,6 +145,8 @@ def check_speakers(a: argparse.Namespace) -> None:
     if v not in ("off", "auto") and not v.isdigit():
         raise SystemExit("--speakers takes off, auto or a number of speakers (e.g. --speakers 3)")
     a.speakers = v
+    if getattr(a, "speaker_embedding", None):
+        config.set_speaker_embedding(a.speaker_embedding)
 
 
 def cmd_languages(a: argparse.Namespace) -> int:
@@ -1326,6 +1331,8 @@ def cmd_pull(a: argparse.Namespace) -> int:
     """Download models ahead of the first run: `mlsubgen pull` = the ASR models + the translators of the default
     routes; names = presets, Ollama tags, ASR labels, 'asr', 'defaults'; --all = every preset too."""
     from . import models
+    if getattr(a, "speaker_embedding", None):
+        config.set_speaker_embedding(a.speaker_embedding)
     names = list(a.names) or ["defaults"]
     if a.all:
         names = ["asr"] + list(TRANSLATORS)
@@ -1780,6 +1787,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("names", nargs="*", help="translator presets, Ollama tags, ASR model names, 'asr' or 'defaults' (default: defaults)")
     pl.add_argument("--all", action="store_true", help="every translator preset as well as the ASR models")
     pl.add_argument("--url", default=None, help="Ollama URL (default: MLSUBGEN_LLM_URL or http://127.0.0.1:11434)")
+    pl.add_argument("--speaker-embedding", default=None, metavar="FILE",
+                    help="which speaker embedding model `pull speakers` fetches (a file of sherpa-onnx's speaker-recongition-models release)")
     pl.set_defaults(fn=cmd_pull)
 
     s = sub.add_parser("selftest", help="exercise segmentation, filters, parsing and typesetting without a GPU")

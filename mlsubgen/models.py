@@ -27,11 +27,14 @@ ASR_MODELS = {
 }
 
 
-# label → (download URL, the file it must leave under SPEAKER_MODEL_DIR). From sherpa-onnx's GitHub releases: no account.
-SPEAKER_MODELS = {
-    "speaker segmentation (pyannote 3.0, ONNX)": (config.SPEAKER_SEGMENTATION_URL, config.SPEAKER_SEGMENTATION_FILE),
-    "speaker embedding (3D-Speaker ERes2Net)": (config.SPEAKER_EMBEDDING_URL, config.SPEAKER_EMBEDDING_FILE),
-}
+def speaker_models() -> dict[str, tuple[str, str]]:
+    """label → (download URL, the file it must leave under SPEAKER_MODEL_DIR). From sherpa-onnx's GitHub releases:
+    no account. Read at call time: the embedding model can be switched (--speaker-embedding)."""
+    emb = config.SPEAKER_EMBEDDING_FILE
+    return {
+        "speaker segmentation (pyannote 3.0, ONNX)": (config.SPEAKER_SEGMENTATION_URL, config.SPEAKER_SEGMENTATION_FILE),
+        f"speaker embedding ({emb[:-5]})": (config.SPEAKER_EMBEDDING_URL, emb),
+    }
 
 
 def _speaker_cached(rel: str) -> tuple[bool, int]:
@@ -79,9 +82,11 @@ sherpa-onnx-pyannote-segmentation-3-0/model.onnx
   project (Apache-2.0), https://github.com/k2-fsa/sherpa-onnx. mlsubgen uses this ONNX build, so no Hugging Face
   account, token or acceptance of that repository's access conditions is involved.
 
-3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
-  3D-Speaker ERes2Net speaker embedding model, Copyright (c) Alibaba, Apache License 2.0 —
-  https://github.com/modelscope/3D-Speaker — ONNX export redistributed by sherpa-onnx.
+speaker embedding model(s) (*.onnx in this folder)
+  3dspeaker_*: 3D-Speaker, Copyright (c) Alibaba, Apache License 2.0 — https://github.com/modelscope/3D-Speaker
+  wespeaker_*: WeSpeaker, Apache License 2.0 — https://github.com/wenet-e2e/wespeaker
+  nemo_*: NVIDIA NeMo models, CC-BY-4.0 — https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nemo
+  ONNX exports redistributed by sherpa-onnx.
 
 mlsubgen combines them with sherpa-onnx's clustering into its own diarization step. It does not reproduce
 pyannote's full diarization pipeline.
@@ -217,9 +222,9 @@ def resolve(name: str) -> list[tuple[str, str, str]]:
     if name in ("asr", "ASR"):
         return [(label, "hf", repo) for label, repo in ASR_MODELS.items()]
     if name in ("speakers", "speaker", "diarization"):
-        return [(label, "url", url) for label, (url, _) in SPEAKER_MODELS.items()]
-    if name in SPEAKER_MODELS:
-        return [(name, "url", SPEAKER_MODELS[name][0])]
+        return [(label, "url", url) for label, (url, _) in speaker_models().items()]
+    if name in speaker_models():
+        return [(name, "url", speaker_models()[name][0])]
     if name == "defaults":
         out = resolve("asr")
         for preset in dict.fromkeys(config.TRANSLATE_ROUTES.values()):
@@ -251,7 +256,7 @@ def status(url: str | None = None) -> dict:
         present, size = _cached(repo)
         asr.append({"name": label, "model": repo, "ready": present, "size": size, "pull": pulls.get(label)})
     speakers = []
-    for label, (u, rel) in SPEAKER_MODELS.items():
+    for label, (u, rel) in speaker_models().items():
         present, size = _speaker_cached(rel)
         speakers.append({"name": label, "model": rel, "ready": present, "size": size, "pull": pulls.get(label)})
     return {"ollama": {"url": url, "reachable": tags is not None},
@@ -285,7 +290,7 @@ def pull_now(name: str, url: str | None = None, out=None) -> int:
                 _pull_ollama(key, target, url, show)
                 print(f"\r   done {' ' * 60}", file=out)
             elif kind == "url":
-                rel = next(r for u, r in SPEAKER_MODELS.values() if u == target)
+                rel = next(r for u, r in speaker_models().values() if u == target)
                 present, size = _speaker_cached(rel)
                 if present:
                     print(f"{key:<40} ready ({size / 1e6:.0f} MB)", file=out); continue

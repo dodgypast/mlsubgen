@@ -508,6 +508,18 @@ def identify(audio: np.ndarray, spans: list[Span], engines, whisper_only: bool =
             mixed = sum(1 for w in judged if w.speaker and w.speaker not in priors)
             notes.append(f"speaker priors for {len(priors)} voice(s) settled {settled} uncertain window(s)"
                          + (f"; {mixed} window(s) of voices with no single language" if mixed else ""))
+        # how well the clustering lines up with language: the speech-weighted share of each voice's confident speech
+        # that is in its own main language (1.0 = every voice speaks one language; a multilingual film with a good
+        # clustering scores high too, because real characters mostly hold one language)
+        tally: dict[str, dict[str, float]] = {}
+        for w in judged:
+            if w.speaker and w.confident and w.lang:
+                d = tally.setdefault(w.speaker, {})
+                d[w.lang] = d.get(w.lang, 0.0) + w.speech
+        total = sum(sum(d.values()) for d in tally.values())
+        if total > 0:
+            purity = sum(max(d.values()) for d in tally.values()) / total
+            notes.append(f"voice/language purity {purity:.2f} over {len(tally)} voice(s)")
     # the run rule stays window-based with speakers on: the seconds-based variant (0.4.5, kept in smooth() for
     # experiments) absorbed short TRUE foreign runs and cost 3–13 points of recall on all three test films
     labels = smooth([w.lang for w in judged], [w.confident for w in judged], margins=[w.margin for w in judged],

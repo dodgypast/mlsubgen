@@ -427,7 +427,8 @@ def speakers_wanted(job: Job) -> bool:
 def speakers_cached(job: Job, data: dict) -> bool:
     s = data.get("speakers")
     return bool(s and s.get("version") == config.SPEAKERS_VERSION and s.get("mode") == job.speakers
-                and s.get("threshold") == (job.speaker_threshold or config.SPEAKER_THRESHOLD))
+                and s.get("threshold") == (job.speaker_threshold or config.SPEAKER_THRESHOLD)
+                and s.get("embedding", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx") == config.SPEAKER_EMBEDDING_FILE)
 
 
 def stage_speakers(job: Job, data: dict, audio) -> list:
@@ -449,6 +450,7 @@ def stage_speakers(job: Job, data: dict, audio) -> list:
     threshold = job.speaker_threshold or config.SPEAKER_THRESHOLD
     turns = spk.diarize(audio, n, threshold, progress=True)
     data["speakers"] = {"version": config.SPEAKERS_VERSION, "mode": job.speakers, "threshold": threshold,
+                        "embedding": config.SPEAKER_EMBEDDING_FILE,
                         "turns": [[round(t.start, 3), round(t.end, 3), t.speaker] for t in turns],
                         "elapsed": round(time.time() - t0, 1)}
     work.save(job.work_file, data)

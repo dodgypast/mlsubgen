@@ -236,8 +236,29 @@ ASR_LANGUAGE_WHISPER = "ja"
 SPEAKER_MODEL_DIR = MLSUBGEN_HOME / "models" / "speakers"       # fetched by `mlsubgen pull speakers` from GitHub
 SPEAKER_SEGMENTATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
 SPEAKER_SEGMENTATION_FILE = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"   # pyannote segmentation-3.0, MIT
-SPEAKER_EMBEDDING_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
-SPEAKER_EMBEDDING_FILE = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"   # 3D-Speaker ERes2Net, Apache-2.0
+# The speaker embedding model decides how well turns cluster into voices. Any file from sherpa-onnx's
+# speaker-recongition-models release works: MLSUBGEN_SPEAKER_EMBEDDING=<file> or --speaker-embedding <file>,
+# then `mlsubgen pull speakers`. Known ones (all CPU, 16 kHz): 3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k
+# (the default so far, 38 MB, trained on Chinese), wespeaker_en_voxceleb_resnet34_LM (26 MB, VoxCeleb),
+# wespeaker_en_voxceleb_resnet293_LM (110 MB, VoxCeleb, the strongest WeSpeaker), nemo_en_titanet_large (97 MB),
+# 3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced (27 MB, Chinese + English). Each has its own clustering
+# threshold scale, so compare them with --speakers N first.
+SPEAKER_EMBEDDING_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
+SPEAKER_EMBEDDING_FILE = os.environ.get("MLSUBGEN_SPEAKER_EMBEDDING", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+if not SPEAKER_EMBEDDING_FILE.endswith(".onnx"):
+    SPEAKER_EMBEDDING_FILE += ".onnx"
+SPEAKER_EMBEDDING_URL = SPEAKER_EMBEDDING_RELEASE + SPEAKER_EMBEDDING_FILE
+
+
+def set_speaker_embedding(name: str) -> str:
+    """Switch the embedding model for this process (--speaker-embedding). Returns the file name."""
+    global SPEAKER_EMBEDDING_FILE, SPEAKER_EMBEDDING_URL
+    name = name.strip()
+    if not name.endswith(".onnx"):
+        name += ".onnx"
+    SPEAKER_EMBEDDING_FILE = name
+    SPEAKER_EMBEDDING_URL = SPEAKER_EMBEDDING_RELEASE + name
+    return name
 SPEAKER_THRESHOLD = 1.0        # clustering threshold when the speaker count is not given: smaller = more speakers.
                                # 2026-10-01 sweep on a ten-minute anime clip: 0.5 → 80 clusters, 0.8 → 31, 1.0 → 14 with a
                                # plausible share per voice, 1.1 → 8; cue-boundary agreement was the same (48–49 %) throughout
