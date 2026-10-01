@@ -196,8 +196,11 @@ LID_SAME_SPEAKER_REACH = 6     # an uncertain window inherits from a confident w
 #   + close at once, seconds-based run rule                                 80/57/60  91/57/51  78/54/10
 #   + close after 1.5 s, seconds-based run rule                             84/60/55  95/58/39  83/54/9
 # Merging short turns loses the boundaries that are the point; the seconds rule absorbs short TRUE foreign runs.
-# The invented switches on the two feature films come from the clustering (93–157 "voices" for a cast of thirty),
-# which is the next lever, not the window rules.
+# Clustering on Babel (same rules): threshold 1.0 → 142 voices 92/70/69; 1.3 → 5 voices 92/67/63; 1.6 and 2.0 →
+# 1 voice, gate rejects, = plain v3; --speakers 30 → 92/70/68. So the invented switches are not the cluster
+# count's doing: they come with per-turn windows themselves, and the priors seldom engage because sherpa's
+# clusters do not line up with language-consistent characters on a multilingual film. The threshold has a cliff
+# between 1.0 and 1.3 on a feature film (142 → 5 voices); 1.0 keeps the turn boundaries, which are the useful part.
 LID_SPEAKER_WINDOW_MIN_SPEECH = 0.0   # a change of voice closes the window at once
 LID_SWITCH_MIN_SPEECH = 8.0           # the seconds-based run rule (experiments only; see lid.smooth)
 LID_STRONG_MIN_SPEECH = 4.0
