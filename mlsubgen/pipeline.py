@@ -35,10 +35,12 @@ class Job:
     tmp_dir: Path = config.TMP_DIR
     context: str = ""                # free text: what the programme is about, names — biases the ASR and the LLM
     glossary: dict | None = None
-    genre: str = "a Japanese documentary / interview programme"
+    genre: str = "a documentary / interview programme"
     window: int = config.WINDOW_CUES
     targets: list[str] = field(default_factory=lambda: ["en"])
     source: str | None = None        # --source LANG: skip the detector, every span is this language
+    speakers: str = "off"            # --speakers off | auto | N (0.4.0): diarize, split cues at speaker changes, hint the translator
+    speaker_threshold: float | None = None
 
     @property
     def work_file(self) -> Path:
@@ -411,16 +413,86 @@ def retry_thin_chunks(engines: Engines, name: str, audio, chunks: list[Span], wo
     return words, log
 
 
+# ── stage 1d: speakers (0.4.0, opt-in) ───────────────────────────────────────────────────────────────────
+def speakers_wanted(job: Job) -> bool:
+    return (job.speakers or "off") != "off"
+
+
+def speakers_cached(job: Job, data: dict) -> bool:
+    s = data.get("speakers")
+    return bool(s and s.get("version") == config.SPEAKERS_VERSION and s.get("mode") == job.speakers
+                and s.get("threshold") == (job.speaker_threshold or config.SPEAKER_THRESHOLD))
+
+
+def stage_speakers(job: Job, data: dict, audio) -> list:
+    """Who spoke when, cached in the work file under `speakers` (per mode and threshold). Returns the turns.
+    A missing package or model is reported once and the stage is skipped — the run goes on without labels."""
+    from . import speakers as spk
+    if not speakers_wanted(job):
+        return []
+    if speakers_cached(job, data):
+        turns = [spk.Turn(s, e, l) for s, e, l in data["speakers"]["turns"]]
+        _log(f"[speakers] cached: {spk.summary(turns)}")
+        return turns
+    ok, why = spk.available()
+    if not ok:
+        _log(f"[speakers] ⚠ {why} — continuing without speaker labels")
+        return []
+    t0 = time.time()
+    n = int(job.speakers) if str(job.speakers).isdigit() else 0
+    threshold = job.speaker_threshold or config.SPEAKER_THRESHOLD
+    turns = spk.diarize(audio, n, threshold, progress=True)
+    data["speakers"] = {"version": config.SPEAKERS_VERSION, "mode": job.speakers, "threshold": threshold,
+                        "turns": [[round(t.start, 3), round(t.end, 3), t.speaker] for t in turns],
+                        "elapsed": round(time.time() - t0, 1)}
+    work.save(job.work_file, data)
+    _log(f"[speakers] {spk.summary(turns)} in {time.time() - t0:.0f}s")
+    return turns
+
+
+def cue_key_for(job: Job, key: str) -> str:
+    """Cues built with speaker labels are a different set (split at speaker changes), and a different mode or
+    threshold gives different labels again: each gets its own cache entry (and translation entry)."""
+    if not speakers_wanted(job):
+        return key
+    thr = job.speaker_threshold or config.SPEAKER_THRESHOLD
+    return f"{key}|spk:{job.speakers}" + (f":{thr}" if job.speakers == "auto" else "")
+
+
 def stage_cues(job: Job, data: dict, key: str, words: list[Word], spans: list[Span], audio=None) -> list[Cue]:
     """Words → cues → filters. `audio` (the 16 kHz signal, when the wav is still around) lets the gate check that
-    a cue the VAD did not see has sound under it before keeping it."""
-    cached = (data.get("cues") or {}).get(key)
+    a cue the VAD did not see has sound under it before keeping it. With speakers on, the words are labelled from
+    the cached turns first, so a speaker change closes a cue and each cue carries its speaker."""
+    from . import speakers as spk
+    ckey = cue_key_for(job, key)
+    cached = (data.get("cues") or {}).get(ckey)
     if cached:
         return [Cue.from_dict(d) for d in cached["cues"]]
-    cues = build_cues(words)
+    labelled = 0
+    sstats: dict = {}
+    if speakers_wanted(job) and (data.get("speakers") or {}).get("turns"):
+        turns = [spk.Turn(s, e, l) for s, e, l in data["speakers"]["turns"]]
+        labelled = spk.label_words(words, turns, stats=sstats)
+        clusters = len({t.speaker for t in turns})
+        ambiguous = sstats.get("ambiguous_words", 0)
+        # the sanity gate: evidence too thin or too muddled is not used at all (the run then behaves as without
+        # --speakers) — one speaker found, or more ambiguous words than SPEAKER_MAX_AMBIGUOUS allows
+        if clusters < config.SPEAKER_MIN_CLUSTERS or (labelled + ambiguous and ambiguous / (labelled + ambiguous) > config.SPEAKER_MAX_AMBIGUOUS):
+            _log(f"[speakers] ⚠ evidence not used: {clusters} cluster(s), {ambiguous} ambiguous of {labelled + ambiguous} "
+                 f"covered words — cues built without speaker labels")
+            for w in words:
+                w.speaker = ""
+            labelled = 0
+    cues = build_cues(words, stats=sstats)
     cues, stats = filter_cues(cues, spans, audio)
     cues = normalise_timing(cues)
-    data.setdefault("cues", {})[key] = {"cues": [c.to_dict() for c in cues], "stats": stats}
+    if labelled:
+        stats["speaker_labelled_words"] = labelled
+        stats["ambiguous_words"] = sstats.get("ambiguous_words", 0)
+        stats["speaker_splits"] = sstats.get("speaker_splits", 0)
+        stats["speaker_changes"] = sum(1 for a, b in zip(cues, cues[1:]) if a.speaker and b.speaker and a.speaker != b.speaker)
+        stats["speakers"] = len({c.speaker for c in cues if c.speaker})
+    data.setdefault("cues", {})[ckey] = {"cues": [c.to_dict() for c in cues], "stats": stats}
     work.save(job.work_file, data)
     langs: dict[str, int] = {}
     for c in cues:

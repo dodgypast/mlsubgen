@@ -8,6 +8,9 @@ numpy==2.5.3
 sacrebleu==2.6.0
 # the second ASR engine (whisper large-v3) and the language-ID second opinion
 faster-whisper==1.2.1
+# speaker diarization (--speakers): pyannote segmentation-3.0 as ONNX + a 3D-Speaker embedding model, on the CPU;
+# the models come from sherpa-onnx's GitHub releases via `mlsubgen pull speakers`
+sherpa-onnx==1.13.3
 # the web front end (mlsubgen web)
 fastapi==0.141.1
 uvicorn==0.52.4

@@ -27,6 +27,67 @@ ASR_MODELS = {
 }
 
 
+# label → (download URL, the file it must leave under SPEAKER_MODEL_DIR). From sherpa-onnx's GitHub releases: no account.
+SPEAKER_MODELS = {
+    "speaker segmentation (pyannote 3.0, ONNX)": (config.SPEAKER_SEGMENTATION_URL, config.SPEAKER_SEGMENTATION_FILE),
+    "speaker embedding (3D-Speaker ERes2Net)": (config.SPEAKER_EMBEDDING_URL, config.SPEAKER_EMBEDDING_FILE),
+}
+
+
+def _speaker_cached(rel: str) -> tuple[bool, int]:
+    p = Path(config.SPEAKER_MODEL_DIR) / rel
+    return (True, p.stat().st_size) if p.is_file() else (False, 0)
+
+
+def _pull_url(key: str, url: str, progress) -> None:
+    """Download one speaker model from GitHub into SPEAKER_MODEL_DIR; a .tar.bz2 is unpacked there."""
+    import shutil
+    import tarfile
+    dest_dir = Path(config.SPEAKER_MODEL_DIR)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    name = url.rsplit("/", 1)[-1]
+    tmp = dest_dir / (name + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "mlsubgen"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                progress(done, total, f"downloading {name}")
+    except urllib.error.URLError as e:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"download failed: {url}: {e}") from None
+    if name.endswith(".tar.bz2"):
+        with tarfile.open(tmp, "r:bz2") as tar:
+            tar.extractall(dest_dir, filter="data")
+        tmp.unlink(missing_ok=True)
+    else:
+        shutil.move(str(tmp), str(dest_dir / name))
+    (dest_dir / "NOTICE.txt").write_text(SPEAKER_NOTICE, encoding="utf-8")
+
+
+SPEAKER_NOTICE = """Speaker models used by mlsubgen (--speakers), downloaded from sherpa-onnx's GitHub releases:
+
+sherpa-onnx-pyannote-segmentation-3-0/model.onnx
+  pyannote segmentation-3.0, Copyright (c) the pyannote.audio authors (Herve Bredin et al.), MIT License —
+  https://huggingface.co/pyannote/segmentation-3.0 — exported to ONNX and redistributed by the sherpa-onnx
+  project (Apache-2.0), https://github.com/k2-fsa/sherpa-onnx. mlsubgen uses this ONNX build, so no Hugging Face
+  account, token or acceptance of that repository's access conditions is involved.
+
+3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx
+  3D-Speaker ERes2Net speaker embedding model, Copyright (c) Alibaba, Apache License 2.0 —
+  https://github.com/modelscope/3D-Speaker — ONNX export redistributed by sherpa-onnx.
+
+mlsubgen combines them with sherpa-onnx's clustering into its own diarization step. It does not reproduce
+pyannote's full diarization pipeline.
+"""
+
+
 def hub_dir() -> Path:
     """Where huggingface_hub keeps its snapshots (HF_HUB_CACHE, else HF_HOME/hub, else ~/.cache/huggingface/hub)."""
     if os.environ.get("HF_HUB_CACHE"):
@@ -81,6 +142,8 @@ def _worker() -> None:
             _set(key, state="running", completed=0, total=0, message="starting")
             if kind == "ollama":
                 _pull_ollama(key, target, config.LLM_URL, lambda done, total, msg: _set(key, completed=done, total=total, message=msg))
+            elif kind == "url":
+                _pull_url(key, target, lambda done, total, msg: _set(key, completed=done, total=total, message=msg))
             else:
                 _pull_hf(key, target, lambda msg: _set(key, message=msg))
             _set(key, state="done", message="ready")
@@ -153,6 +216,10 @@ def resolve(name: str) -> list[tuple[str, str, str]]:
     name = name.strip()
     if name in ("asr", "ASR"):
         return [(label, "hf", repo) for label, repo in ASR_MODELS.items()]
+    if name in ("speakers", "speaker", "diarization"):
+        return [(label, "url", url) for label, (url, _) in SPEAKER_MODELS.items()]
+    if name in SPEAKER_MODELS:
+        return [(name, "url", SPEAKER_MODELS[name][0])]
     if name == "defaults":
         out = resolve("asr")
         for preset in dict.fromkeys(config.TRANSLATE_ROUTES.values()):
@@ -183,10 +250,14 @@ def status(url: str | None = None) -> dict:
     for label, repo in ASR_MODELS.items():
         present, size = _cached(repo)
         asr.append({"name": label, "model": repo, "ready": present, "size": size, "pull": pulls.get(label)})
+    speakers = []
+    for label, (u, rel) in SPEAKER_MODELS.items():
+        present, size = _speaker_cached(rel)
+        speakers.append({"name": label, "model": rel, "ready": present, "size": size, "pull": pulls.get(label)})
     return {"ollama": {"url": url, "reachable": tags is not None},
             "profile": config.PROFILE, "vram_gb": config.VRAM_GB,
             "routes": [{"pair": f"{a}→{b}", "preset": m} for (a, b), m in config.TRANSLATE_ROUTES.items()],
-            "translators": translators, "asr": asr,
+            "translators": translators, "asr": asr, "speakers": speakers,
             "offline": os.environ.get("HF_HUB_OFFLINE") == "1", "active": any(p.get("state") in ("queued", "running") for p in pulls.values())}
 
 
@@ -213,6 +284,15 @@ def pull_now(name: str, url: str | None = None, out=None) -> int:
                         _last[0] = time.time()
                 _pull_ollama(key, target, url, show)
                 print(f"\r   done {' ' * 60}", file=out)
+            elif kind == "url":
+                rel = next(r for u, r in SPEAKER_MODELS.values() if u == target)
+                present, size = _speaker_cached(rel)
+                if present:
+                    print(f"{key:<40} ready ({size / 1e6:.0f} MB)", file=out); continue
+                print(f"{key:<40} downloading from GitHub …", file=out)
+                _pull_url(key, target, lambda done, total, msg: None)
+                present, size = _speaker_cached(rel)
+                print(f"   done ({size / 1e6:.0f} MB) → {Path(config.SPEAKER_MODEL_DIR) / rel}", file=out)
             else:
                 present, size = _cached(target)
                 if present:

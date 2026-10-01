@@ -56,6 +56,12 @@
         <option value="ja">ja — ignore embedded target tracks, make our own translation</option>
         <option value="ignore">ignore — always transcribe the audio</option>
       </select>
+      <label>Speakers</label>
+      <select name="speakers" title="speaker diarization (CPU; pull the speaker models first): a speaker change closes a cue and the translator is told who is talking — labels never appear in the subtitles">
+        <option value="off">off</option>
+        <option value="auto">auto — find the speakers</option>
+        <option value="2">2 speakers</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option>
+      </select>
       <label>Batch</label>
       <input name="batch" value="10" size="3" title="files per ASR-then-translate round; 0 = all ASR first">
     </div>

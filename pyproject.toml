@@ -31,6 +31,7 @@ dependencies = [
   "jinja2==3.1.6",
   "python-multipart==0.0.32",
   "faster-whisper==1.2.1",
+  "sherpa-onnx==1.13.3",
 ]
 
 [project.scripts]

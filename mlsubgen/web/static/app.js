@@ -76,7 +76,7 @@ async function browse(path) {
   setPicked([]);                                    // a new folder: start the selection over
 }
 
-const gb = n => n ? `${(n / 1e9).toFixed(1)} GB` : "";
+const gb = n => !n ? "" : (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`);
 
 async function refreshModels() {
   const panel = $("#models-panel"); if (!panel) return;
@@ -94,7 +94,8 @@ async function refreshModels() {
   const row = (x, kind) => `<tr><td>${esc(x.name)}${kind === "tl" && m.routes.some(r => r.preset === x.name) ? ' <span class="muted">(route default)</span>' : ""}</td>
     <td><code>${esc(x.model)}</code></td><td>${state(x)}</td>
     <td>${x.ready || (x.pull && x.pull.state !== "error" && x.pull.state !== "done") ? "" : `<button class="secondary small" data-pull="${esc(x.name)}">pull</button>`}</td></tr>`;
-  $("#models tbody").innerHTML = m.translators.map(x => row(x, "tl")).join("") + m.asr.map(x => row(x, "asr")).join("");
+  $("#models tbody").innerHTML = m.translators.map(x => row(x, "tl")).join("") + m.asr.map(x => row(x, "asr")).join("")
+    + (m.speakers || []).map(x => row(x, "spk")).join("");
   const missing = [...m.translators.filter(x => !x.ready && m.routes.some(r => r.preset === x.name)), ...m.asr.filter(x => !x.ready)].length;
   $("#models-note").textContent = `profile ${m.profile}${m.vram_gb ? ` (${Math.round(m.vram_gb)} GB GPU)` : ""} · `
     + (m.ollama.reachable ? "" : "Ollama unreachable · ") + (m.active ? "pulling…" : (missing ? `${missing} missing for a default run` : "all ready for a default run"))

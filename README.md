@@ -28,6 +28,15 @@ each stretch is transcribed with that language forced, and each of 45 target lan
   in the target language is copied through, not translated.
 - **Subtitle typesetting** per language: line length by script, reading-speed ceilings (slower for CJK), minimum
   durations and gaps, cluster-safe line breaks for Thai, Lao, Khmer, Burmese and Devanagari.
+- **Speaker diarization, optional** (`--speakers auto`, or the Speakers option in the web form): who spoke when,
+  on the CPU, through sherpa-onnx's pipeline — pyannote's segmentation-3.0 as ONNX, a 3D-Speaker embedding model
+  and sherpa's clustering. The upstream segmentation-3.0 weights are MIT-licensed; mlsubgen uses the ONNX build
+  that sherpa-onnx distributes from GitHub Releases, so no Hugging Face account or token is needed and no
+  repository access conditions have to be accepted (`mlsubgen pull speakers` fetches both files and writes the
+  attribution notice beside them). A speaker change closes a cue, and the translator is told which lines share a
+  voice so each character's register stays consistent. The labels are evidence, not truth: a word that two voices
+  cover about equally stays unlabelled, a file where the evidence is too muddled is processed as if the option
+  were off, and the labels never appear in the subtitles.
 - **Embedded subtitles are used before the audio is**: a video that already carries full subtitles in a target
   language is left alone for that target, and any other full text track in one of the 45 languages — not forced,
   not signs-and-songs — becomes the transcript to translate from, the spoken language's track first. No ASR time
@@ -95,6 +104,7 @@ mlsubgen                         # every video below here → the default langua
 mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
+mlsubgen --speakers auto FOLDER  # with speaker diarization (mlsubgen pull speakers once);  --speakers 3  when you know the count
 mlsubgen languages               # the 45 codes, their native names, which engine decodes each
 mlsubgen config targets th,de    # save the default languages (the web form has "make these the default");  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
@@ -125,6 +135,7 @@ the language forced.
 | chunks | ≤ 30 s, one language each, covering the whole timeline; only stretches at the noise floor are skipped |
 | ASR | both engines decode every chunk with its language forced; checkpointed after every chunk |
 | merge | the translator LLM reconciles the two transcripts where they differ (chunks that agree need no LLM) |
+| speakers | with `--speakers`: speaker turns from sherpa-onnx (CPU); each word takes the overlapping turn |
 | cues | sentence ends, pauses, length limits, hallucination filters (evidence-gated) |
 | translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, register rules, retry and per-line fallback |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps → `<video>.<lang>.srt` |
@@ -194,6 +205,10 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
 - NVIDIA only.
 - The `12gb` and `8gb` profiles are new and lightly tested: the ASR side is the same code with less resident at
   once, but the small translators have had far less use than the 27–31B ones. Reports welcome.
+- Speaker diarization is new and off by default. sherpa-onnx's clustering is not pyannote's tuned pipeline, and
+  several similar voices over a music bed is the hard case, so the labels are passed to the translator as hints
+  and never written out. `mlsubgen bench VIDEO --speakers auto` against the same clip without them shows what it
+  does for your material.
 
 ## Support and provenance
 

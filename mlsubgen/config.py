@@ -206,6 +206,20 @@ ASR_MODEL_WHISPER = "large-v3"                # the full model: turbo's 4-layer 
 ASR_LANGUAGE_QWEN = "Japanese"
 ASR_LANGUAGE_WHISPER = "ja"
 
+# ── Speakers (diarization, 0.4.0) — sherpa-onnx, on the CPU; opt-in with --speakers ─────────────────────────
+SPEAKER_MODEL_DIR = MLSUBGEN_HOME / "models" / "speakers"       # fetched by `mlsubgen pull speakers` from GitHub
+SPEAKER_SEGMENTATION_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+SPEAKER_SEGMENTATION_FILE = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"   # pyannote segmentation-3.0, MIT
+SPEAKER_EMBEDDING_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+SPEAKER_EMBEDDING_FILE = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"   # 3D-Speaker ERes2Net, Apache-2.0
+SPEAKER_THRESHOLD = 0.5        # clustering threshold when the speaker count is not given: smaller = more speakers
+SPEAKER_MIN_ON = 0.3           # a speaker turn shorter than this is dropped
+SPEAKER_MIN_OFF = 0.5          # a gap shorter than this does not end a turn
+SPEAKER_MIN_OVERLAP = 0.6      # a word takes a speaker only when that speaker covers this share of it (and twice the runner-up)
+SPEAKER_MAX_AMBIGUOUS = 0.5    # labels are dropped for a file when more than this share of its words are ambiguous …
+SPEAKER_MIN_CLUSTERS = 2       # … or when the diarizer found fewer speakers than this (nothing to tell apart)
+SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
+
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
 VAD_THRESHOLD = 0.5
 VAD_MIN_SILENCE_MS = 300

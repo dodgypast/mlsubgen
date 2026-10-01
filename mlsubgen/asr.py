@@ -30,6 +30,7 @@ class Word:
     start: float
     end: float
     lang: str = "ja"
+    speaker: str = ""        # "S1", "S2" … from the speakers stage (0.4.0); "" = unlabelled / speakers off
 
 
 def _log(msg: str) -> None:
@@ -364,4 +365,4 @@ def words_to_dicts(words: list[Word]) -> list[dict]:
 
 
 def words_from_dicts(items: list[dict]) -> list[Word]:
-    return [Word(d["text"], float(d["start"]), float(d["end"]), d.get("lang", "ja")) for d in items]
+    return [Word(d["text"], float(d["start"]), float(d["end"]), d.get("lang", "ja"), d.get("speaker", "")) for d in items]

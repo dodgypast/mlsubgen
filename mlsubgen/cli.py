@@ -92,6 +92,12 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--profile", default=None, choices=["auto", *config.PROFILES],
                    help="hardware profile: full (>= 20 GB GPU), 12gb, 8gb — translator routes, whisper precision and "
                         "whether both ASR engines may be resident (default: MLSUBGEN_PROFILE, else by the GPU's memory)")
+    p.add_argument("--speakers", default="off", metavar="off|auto|N",
+                   help="speaker diarization (0.4.0, CPU, `mlsubgen pull speakers` first): auto = find the speakers, "
+                        "N = there are N; a speaker change closes a cue and the translator is told who is talking "
+                        "(labels are hints, never written to the subtitles). Default off")
+    p.add_argument("--speaker-threshold", type=float, default=None,
+                   help=f"clustering threshold for --speakers auto (default {config.SPEAKER_THRESHOLD}; smaller = more speakers)")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -129,6 +135,13 @@ def parse_targets(text: str | None, warn: bool = True) -> list[str]:
         _log(f"[targets] unknown language code(s) {', '.join(unknown)} — the translator will be asked for them as written; "
              f"known codes: mlsubgen languages")
     return out
+
+
+def check_speakers(a: argparse.Namespace) -> None:
+    v = str(getattr(a, "speakers", "off") or "off").lower()
+    if v not in ("off", "auto") and not v.isdigit():
+        raise SystemExit("--speakers takes off, auto or a number of speakers (e.g. --speakers 3)")
+    a.speakers = v
 
 
 def cmd_languages(a: argparse.Namespace) -> int:
@@ -193,6 +206,9 @@ OPTIONS YOU WILL ACTUALLY USE (run)
                          embedded source track yourself even if a target track exists; ignore = always transcribe
   --keep-source          also write the transcript in the spoken language as <video>.<lang>.srt
   --keep-work            keep the ASR cache after the .srt (re-translate later with -t ... --overwrite, no ASR)
+  --speakers auto|N      speaker diarization (CPU; `mlsubgen pull speakers` once): a speaker change closes a cue and
+                         the translator is told who is talking, so each character's register stays consistent;
+                         the labels never appear in the subtitles. Off by default
   --no-recursive         stay in one folder      --dry-run   list what would be processed      --now   run here, not queued
 
 HOW A RUN WORKS   (rounds of --batch files, default 10, so subtitles appear every round)
@@ -256,8 +272,9 @@ class Prefetch:
 def cmd_run(a: argparse.Namespace) -> int:
     from .asr import Engines, words_from_dicts
     from .audio import extract_wav, load_wav
-    from .pipeline import (Job, NotSupported, asr_key_for, check_source, emit, missing_targets, srt_path_for,
-                           stage_asr, stage_audio, stage_cues, stage_lid, stage_merge, stage_subs, stage_translate)
+    from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, missing_targets, speakers_cached,
+                           speakers_wanted, srt_path_for, stage_asr, stage_audio, stage_cues, stage_lid, stage_merge,
+                           stage_speakers, stage_subs, stage_translate)
     from .probe import probe
     from .segment import Cue
     from .subs import code_for_tag, pick, plan_sources
@@ -268,6 +285,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         return enqueue(a)
     if a.profile:
         config.apply_profile(a.profile)
+    check_speakers(a)
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
     targets = parse_targets(a.target)
     source = a.source or ("ja" if a.assume_ja else None)
@@ -333,7 +351,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 0
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-                 a.window, want, source) for v, want in todo]
+                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -462,7 +480,8 @@ def cmd_run(a: argparse.Namespace) -> int:
                             pre = entry.get()                     # an ffmpeg failure surfaces here as SystemExit
                         akey = asr_key_for(engines, context, a.asr)
                         cached = bool((data.get("asr") or {}).get(akey))
-                        pr, spans = stage_audio(job, data, need_wav=not cached, prefetched=pre)
+                        need_spk = speakers_wanted(job) and not speakers_cached(job, data)
+                        pr, spans = stage_audio(job, data, need_wav=not cached or need_spk, prefetched=pre)
                     except SystemExit as e:
                         skip(job, str(e)); continue
                     speech = sum(sp.dur for sp in spans)
@@ -486,7 +505,11 @@ def cmd_run(a: argparse.Namespace) -> int:
                     else:
                         words = words_from_dicts(data["asr"][akey]["words"])
                         _log(f"[asr] cached ({akey})")
-                    keys[job.video] = akey
+                    if need_spk:                                  # speakers (0.4.0): CPU, on the wav we already have
+                        if audio is None:
+                            audio = load_wav(job.wav)
+                        stage_speakers(job, data, audio)
+                    keys[job.video] = cue_key_for(job, akey)      # cues (and translations) are a separate set with speakers on
                     if data["asr"][akey].get("merge") == "pending":
                         pending.append((job, akey, spans))       # cues after the merge; the wav stays for the energy gate
                         continue
@@ -798,8 +821,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
     from .asr import Engines
     from .audio import load_wav
     from .bench import align_reference, chrf, write_html
-    from .pipeline import (Job, NotSupported, asr_key_for, check_source, emit, stage_asr, stage_audio, stage_cues,
-                           stage_lid, stage_translate)
+    from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, speakers_cached, speakers_wanted,
+                           stage_asr, stage_audio, stage_cues, stage_lid, stage_merge, stage_speakers, stage_translate)
     from .segment import Cue
     from .srt import read_srt
     from .translate import ClientPool
@@ -810,6 +833,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
         _log(f"not found: {video}"); return 1
     if a.profile:
         config.apply_profile(a.profile)
+    check_speakers(a)
     context = a.context or (Path(a.context_file).expanduser().read_text(encoding="utf-8").strip() if a.context_file else "")
     glossary = load_glossary(a.glossary)
     clip = clip_arg(a.clip)
@@ -817,13 +841,16 @@ def cmd_bench(a: argparse.Namespace) -> int:
     target = parse_targets(a.target)[0]
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-              a.window, [target], source)
+              a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold)
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
     key = asr_key_for(engines, context, a.asr)
+    audio = None
     try:
-        pr, spans = stage_audio(job, data, need_wav=not (data.get("asr") or {}).get(key))
-        if (data.get("asr") or {}).get(key):
+        asr_cached = bool((data.get("asr") or {}).get(key))
+        need_spk = speakers_wanted(job) and not speakers_cached(job, data)
+        pr, spans = stage_audio(job, data, need_wav=not asr_cached or need_spk)
+        if asr_cached:
             from .asr import words_from_dicts
             words = words_from_dicts(data["asr"][key]["words"]); _log(f"[asr] cached ({key})")
         else:
@@ -834,15 +861,32 @@ def cmd_bench(a: argparse.Namespace) -> int:
             except NotSupported as e:
                 _log(f"[lid] {e}"); return 1
             words = stage_asr(job, data, engines, audio, cover_chunks(audio, res.spans, len(audio) / 16000.0, dominant=res.dominant), a.asr)
+        if need_spk:
+            if audio is None:
+                audio = load_wav(job.wav)
+            stage_speakers(job, data, audio)
     finally:
         engines.close()
-    cues = stage_cues(job, data, key, words, spans)
+    if (data.get("asr") or {}).get(key, {}).get("merge") == "pending":
+        # dual mode: the engines have left the GPU, the LLM reconciles the two transcripts (the bench's own translator list
+        # names the referee: the first available preset)
+        presets0 = {n: resolve_translator(n, None, a.backend, a.url, None, a.num_ctx, a.temperature) for n in names}
+        pool0 = ClientPool(a.url, a.backend, presets0)
+        client = None
+        for n in names:
+            ok, _ = pool0.client(n).available()
+            if ok:
+                client = pool0.use(n); break
+        words = stage_merge(job, data, key, client)
+        pool0.unload_all()
+    cues = stage_cues(job, data, key, words, spans, audio)
     if not cues:
         _log("no speech found in the clip"); return 1
+    key = cue_key_for(job, key)                       # cues and translations: the speaker-labelled set is its own entry
 
     bench_dir = Path(a.out_dir).expanduser()
     bench_dir.mkdir(parents=True, exist_ok=True)
-    tag = video.stem + (f".{int(clip[0])}-{int(clip[1])}" if clip else "")
+    tag = video.stem + (f".{int(clip[0])}-{int(clip[1])}" if clip else "") + (f".spk-{job.speakers}" if speakers_wanted(job) else "")
     reference = None
     ref_texts = None
     if a.reference:
@@ -877,7 +921,12 @@ def cmd_bench(a: argparse.Namespace) -> int:
     if not results:
         return 2
     html_out = bench_dir / f"{tag}.bench.html"
-    write_html(html_out, f"mlsubgen bench — {video.name}", cues, results, stats, ref_texts)
+    shown = [Cue.from_dict(c.to_dict()) for c in cues]
+    for c in shown:                                   # the page shows the speaker label the translator was given
+        if c.speaker:
+            c.ja = f"[{c.speaker}] {c.ja}"
+    write_html(html_out, f"mlsubgen bench — {video.name}" + (" — with speaker labels" if speakers_wanted(job) else ""),
+               shown, results, stats, ref_texts)
     _log(f"\n[bench] {html_out}")
     for n, s in stats.items():
         _log(f"  {n:<16} {s['summary']}{'  chrF++ ' + str(s['chrf']) if s.get('chrf') is not None else ''}")
@@ -925,6 +974,12 @@ def cmd_models(a: argparse.Namespace) -> int:
     for m in st["asr"]:
         state = f"ready ({m['size'] / 1e9:.1f} GB)" if m["ready"] else "not downloaded"
         print(f"  {m['name']:<26} {m['model']:<40} {state}")
+    from . import speakers as _spk
+    ok, why = _spk.available()
+    print(f"\nspeaker diarization (optional, --speakers; CPU; {config.SPEAKER_MODEL_DIR}): {'ready' if ok else why}")
+    for m in st["speakers"]:
+        state = f"ready ({m['size'] / 1e6:.0f} MB)" if m["ready"] else "not downloaded — mlsubgen pull speakers"
+        print(f"  {m['name']:<42} {state}")
     missing = [t["name"] for t in st["translators"] if not t["ready"] and t["name"] in set(config.TRANSLATE_ROUTES.values())]
     missing += [m["name"] for m in st["asr"] if not m["ready"]]
     if missing:
@@ -1205,6 +1260,35 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert len(_models.resolve("defaults")) == len(_models.ASR_MODELS) + len(set(config.TRANSLATE_ROUTES.values()))
     st = _models.status("http://127.0.0.1:1")                    # nothing listens there: reported, not raised
     assert st["ollama"]["reachable"] is False and len(st["asr"]) == 3 and all("ready" in t for t in st["translators"])
+    # speakers (0.4.0): words take the overlapping turn, a speaker change closes a cue, the cue carries its speaker,
+    # the translator prompt tags the lines and gets the rule, and an echoed tag is stripped from the output
+    from . import speakers as _spk
+    from .translate import build_prompt as _bp, spoken as _spoken
+    turns = [_spk.Turn(0.0, 1.0, "S1"), _spk.Turn(1.2, 3.0, "S2"), _spk.Turn(3.1, 5.0, "S1")]
+    sw = [Word("おはよう", 0.1, 0.5, "ja"), Word("ございます", 0.5, 0.9, "ja"), Word("はい", 1.3, 1.6, "ja"),
+          Word("そうですね", 1.7, 2.5, "ja"), Word("ええ", 3.2, 3.5, "ja"), Word("行きましょう", 3.6, 4.5, "ja"), Word("ん", 7.0, 7.2, "ja")]
+    st_ = {}
+    assert _spk.label_words(sw, turns, stats=st_) == 6 and [w.speaker for w in sw] == ["S1", "S1", "S2", "S2", "S1", "S1", ""]
+    assert st_["ambiguous_words"] == 0
+    assert _spk.dominant(sw[:4]) == "S2" and _spk.dominant([sw[-1]]) == ""     # by duration: S2 1.1 s vs S1 0.8 s
+    # a word two voices cover about equally stays unlabelled — unknown beats confidently wrong
+    amb = [Word("ね", 0.8, 1.4, "ja")]                                        # 0.2 s under S1 (to 1.0), 0.2 s under S2 (from 1.2)
+    st_ = {}
+    assert _spk.label_words(amb, turns, stats=st_) == 0 and amb[0].speaker == "" and st_["ambiguous_words"] == 1
+    cst = {}
+    scues = build_cues(sw[:6], stats=cst)
+    assert [c.speaker for c in scues] == ["S1", "S2", "S1"] and scues[1].ja == "はいそうですね", [(c.ja, c.speaker) for c in scues]
+    assert cst["speaker_splits"] == 1, cst                                   # S1→S2 closed a cue; S2→S1 was already a pause
+    assert "speaker(s)" in _spk.summary(turns) and _spk.summary(turns).startswith("2 speaker(s), 3 turns")
+    assert _spoken(scues[0]) == "[S1] おはようございます" and _spoken(_Cue(0, 0, 1, "x")) == "x"
+    sys_p, user_p = _bp(TRANSLATORS[config.DEFAULT_TRANSLATOR], scues[:2], [], scues[2:], {}, "a film", "en")
+    assert "[S1] おはようございます" in user_p and "Never output the tags" in sys_p
+    sys_q, _ = _bp(TRANSLATORS[config.DEFAULT_TRANSLATOR], [_Cue(0, 0, 1, "x")], [], [], {}, "a film", "en")
+    assert "speaker tag" not in sys_q, "no tags, no rule"
+    assert clean_en("[S2] Good morning.") == "Good morning." and clean_en("[S2]Good morning.") == "Good morning."
+    assert _spk.available()[0] or "sherpa-onnx" in _spk.available()[1] or "missing" in _spk.available()[1]
+    assert _models.resolve("speakers") and all(k == "url" for _, k, _ in _models.resolve("speakers"))
+    assert "speakers" in _models.status("http://127.0.0.1:1") and len(_models.status("http://127.0.0.1:1")["speakers"]) == 2
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None

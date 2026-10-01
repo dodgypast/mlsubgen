@@ -273,23 +273,42 @@ TRANSLATEGEMMA_USER = ("You are a professional {src} to {tgt} translator. Your g
                        "Please translate the following {src} text into {tgt}:\n\n\n{text}")
 
 
+SPEAKER_RULE = ("Some lines start with a speaker tag like [S2]. The same tag means the same voice throughout; a different "
+                "tag is a different voice. The tags come from automatic speaker detection and can be wrong — treat them "
+                "as a hint. They say ONLY that lines come from the same or a different speaker: nothing about who the "
+                "speaker is — not their name, age, sex, status or relationship. Infer those from the dialogue itself, "
+                "never from the tag. Keep each speaker's register, politeness level and pronouns consistent from line "
+                "to line. Never output the tags.")
+_SPEAKER_TAG = re.compile(r"^\s*\[S\d+\]\s*")
+
+
+def spoken(c: Cue) -> str:
+    """A cue's source text as the translator sees it: with its speaker tag when the speakers stage labelled it."""
+    return f"[{c.speaker}] {c.ja}" if c.speaker else c.ja
+
+
 def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: list[Cue],
                  glossary: dict[str, str], genre: str, target: str) -> tuple[str | None, str]:
     src = lang_name(window[0].lang)
     tgt = lang_name(target)
-    numbered = "\n".join(f"{c.idx + 1}\t{c.ja}" for c in window)
-    if tr.prompt_style == "translategemma":
+    tagged = any(c.speaker for c in window + before + after)
+    if tr.prompt_style == "translategemma":                      # fixed prompt: no room for tags
+        numbered = "\n".join(f"{c.idx + 1}\t{c.ja}" for c in window)
         return None, TRANSLATEGEMMA_USER.format(src=src, tgt=tgt, text=numbered.replace("\t", ". "))
+    numbered = "\n".join(f"{c.idx + 1}\t{spoken(c)}" for c in window)
     parts = []
     if glossary:
         parts.append(f"GLOSSARY ({src} → {tgt}):\n" + "\n".join(f"{k} → {v}" for k, v in glossary.items()))
     if before:
         parts.append("CONTEXT (already translated, do not output):\n" +
-                     "\n".join(f"[{c.idx + 1}] {c.ja}  →  {c.en}" for c in before))
+                     "\n".join(f"[{c.idx + 1}] {spoken(c)}  →  {c.en}" for c in before))
     parts.append("TRANSLATE THESE LINES:\n" + numbered)
     if after:
-        parts.append("FOLLOWING LINES (context only, do not output):\n" + "\n".join(f"[{c.idx + 1}] {c.ja}" for c in after))
-    return system_prompt(window[0].lang, target, genre), "\n\n".join(parts)
+        parts.append("FOLLOWING LINES (context only, do not output):\n" + "\n".join(f"[{c.idx + 1}] {spoken(c)}" for c in after))
+    system = system_prompt(window[0].lang, target, genre)
+    if tagged:
+        system += "\n- " + SPEAKER_RULE
+    return system, "\n\n".join(parts)
 
 
 def parse_numbered(text: str) -> dict[int, str]:
@@ -316,6 +335,7 @@ def clean_en(s: str, target: str = "en") -> str:
     """Clean a translated line (the name is historical: it cleans any target language). CJK punctuation is only
     Westernised when the target is not itself CJK — a Japanese or Chinese subtitle keeps its 。 and 、."""
     s = s.strip()
+    s = _SPEAKER_TAG.sub("", s)                   # an echoed speaker tag never reaches the subtitle
     s = _TN.sub("", s)
     if len(s) >= 2 and s[0] in "\"“'‘" and s[-1] in "\"”'’":
         s = s[1:-1].strip()
@@ -413,7 +433,7 @@ def _translate_window(client: LLMClient, system: str | None, user: str, window: 
                 _log(f"[tl] still looping; splitting window {window[0].idx + 1}–{window[-1].idx + 1} in two")
                 hits = 0
                 for part in (window[:mid], window[mid:]):
-                    numbered = "\n".join(f"{c.idx + 1}\t{c.ja}" for c in part)
+                    numbered = "\n".join(f"{c.idx + 1}\t{spoken(c)}" for c in part)
                     if "TRANSLATE THESE LINES:\n" in user:
                         puser = re.sub(r"TRANSLATE THESE LINES:\n.*?(?=\n\n|\Z)", "TRANSLATE THESE LINES:\n" + numbered,
                                        user, count=1, flags=re.S)
@@ -445,14 +465,16 @@ def _translate_window(client: LLMClient, system: str | None, user: str, window: 
 def _translate_single(client: LLMClient, cue: Cue, context: list[Cue], glossary: dict[str, str], genre: str,
                       target: str) -> str:
     src, tgt = lang_name(cue.lang), lang_name(target)
-    ctx = "\n".join(f"{c.ja} → {c.en}" for c in context[-6:] if c.en)
+    ctx = "\n".join(f"{spoken(c)} → {c.en}" for c in context[-6:] if c.en)
     gl = "\n".join(f"{k} → {v}" for k, v in glossary.items())
     if client.tr.prompt_style == "translategemma":
         system, user = None, TRANSLATEGEMMA_USER.format(src=src, tgt=tgt, text=cue.ja)
     else:
         system = system_prompt(cue.lang, target, genre)
+        if cue.speaker or any(c.speaker for c in context):
+            system += "\n- " + SPEAKER_RULE
         user = ((f"GLOSSARY:\n{gl}\n\n" if gl else "") + (f"CONTEXT (do not output):\n{ctx}\n\n" if ctx else "") +
-                f"Translate this one subtitle line into {tgt}. Output only the {tgt} text, nothing else:\n{cue.ja}")
+                f"Translate this one subtitle line into {tgt}. Output only the {tgt} text, nothing else:\n{spoken(cue)}")
     for attempt in range(2):
         try:
             text = client.chat(system, user, max_tokens=256, nudge=(attempt == 1))

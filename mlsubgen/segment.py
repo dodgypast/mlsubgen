@@ -24,6 +24,7 @@ class Cue:
     speech: float = 1.0      # VAD speech ratio under the cue
     flags: list[str] | None = None
     lang: str = "ja"         # the source language of this cue
+    speaker: str = ""        # "S1", "S2" … when the speakers stage ran (0.4.0); a hint for the translator, never output
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -31,7 +32,7 @@ class Cue:
     @staticmethod
     def from_dict(d: dict) -> "Cue":
         return Cue(int(d["idx"]), float(d["start"]), float(d["end"]), d.get("ja", ""), d.get("en", ""),
-                   float(d.get("speech", 1.0)), d.get("flags"), d.get("lang", "ja"))
+                   float(d.get("speech", 1.0)), d.get("flags"), d.get("lang", "ja"), d.get("speaker", ""))
 
 
 def join_words(parts: list[str], lang: str = "ja") -> str:
@@ -48,10 +49,13 @@ def join_ja(parts: list[str]) -> str:
 
 
 def build_cues(words: list[Word], max_sec: float = config.CUE_MAX_SEC, max_chars: int = config.CUE_MAX_CHARS_JA,
-               gap_split: float = config.CUE_GAP_SPLIT_SEC) -> list[Cue]:
-    """Sentence ends, pauses, overflow and language changes all close a cue."""
+               gap_split: float = config.CUE_GAP_SPLIT_SEC, stats: dict | None = None) -> list[Cue]:
+    """Sentence ends, pauses, overflow, language changes and speaker changes all close a cue. `stats` (optional)
+    gets `speaker_splits`: how many cues were closed by a speaker change alone."""
+    from .speakers import dominant
     cues: list[Cue] = []
     cur: list[Word] = []
+    speaker_splits = 0
 
     def flush() -> None:
         nonlocal cur
@@ -60,7 +64,7 @@ def build_cues(words: list[Word], max_sec: float = config.CUE_MAX_SEC, max_chars
         lang = cur[0].lang
         text = join_words([w.text for w in cur], lang)
         if text and not PUNCT_ONLY.match(text):
-            cues.append(Cue(len(cues), cur[0].start, cur[-1].end, text, lang=lang))
+            cues.append(Cue(len(cues), cur[0].start, cur[-1].end, text, lang=lang, speaker=dominant(cur)))
         elif text and cues:
             cues[-1].ja += text   # stray punctuation → attach to the previous cue
         cur = []
@@ -83,7 +87,7 @@ def build_cues(words: list[Word], max_sec: float = config.CUE_MAX_SEC, max_chars
             continue
         if PUNCT_ONLY.match(w.text):
             if cur:
-                cur[-1] = Word(cur[-1].text + w.text.strip(), cur[-1].start, max(cur[-1].end, w.end), cur[-1].lang)
+                cur[-1] = Word(cur[-1].text + w.text.strip(), cur[-1].start, max(cur[-1].end, w.end), cur[-1].lang, cur[-1].speaker)
                 if w.text.strip()[-1] in SENT_END:
                     flush()
             elif cues:
@@ -94,7 +98,10 @@ def build_cues(words: list[Word], max_sec: float = config.CUE_MAX_SEC, max_chars
             dur = w.end - cur[0].start
             chars = sum(len(x.text) for x in cur)
             limit = max_chars if cur[0].lang in NO_SPACE_LANGS else max_chars * 2   # Latin text is roomier per char
-            if w.lang != cur[0].lang or gap >= gap_split or dur > max_sec:
+            new_speaker = bool(w.speaker) and bool(cur[-1].speaker) and w.speaker != cur[-1].speaker
+            if w.lang != cur[0].lang or gap >= gap_split or dur > max_sec or new_speaker:
+                if new_speaker and not (w.lang != cur[0].lang or gap >= gap_split or dur > max_sec):
+                    speaker_splits += 1               # closed by the speaker change alone
                 flush()
             elif chars + len(w.text) > limit:
                 split_at_clause()
@@ -104,6 +111,8 @@ def build_cues(words: list[Word], max_sec: float = config.CUE_MAX_SEC, max_chars
     flush()
     for i, c in enumerate(cues):
         c.idx = i
+    if stats is not None:
+        stats["speaker_splits"] = speaker_splits
     return cues
 
 
