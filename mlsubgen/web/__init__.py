@@ -315,7 +315,7 @@ def read_skipped() -> list[dict]:
         latest[path] = {"when": when, "path": path, "name": Path(path).name, "reason": reason,
                         "language": reason.startswith("audio is ") or reason.startswith("language could not"),
                         "n": latest.get(path, {}).get("n", 0) + 1,
-                        # a subtitle in any of the default languages — English is not special (2026-10-02)
+                        # a subtitle in any of the default languages — English is not special (2026-10-01)
                         "has_srt": any(Path(path).with_name(f"{Path(path).stem}.{t}.srt").exists()
                                        for t in config.DEFAULT_TARGETS.split(","))}
     return sorted(latest.values(), key=lambda d: d["when"], reverse=True)

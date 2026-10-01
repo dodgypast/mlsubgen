@@ -106,7 +106,7 @@ def set_default_targets(codes: list[str] | None) -> tuple[str, str]:
 # Filled in from the hardware profile below (apply_profile) — see PROFILES.
 TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
 
-# ── Hardware profiles (2026-10-02) ───────────────────────────────────────────────────────────────────────────
+# ── Hardware profiles (2026-10-01) ───────────────────────────────────────────────────────────────────────────
 # The ASR stage and the translation stage never share the GPU, so the card only has to hold the bigger of the two.
 #   full  ≥ 20 GB   both ASR engines resident (≈ 10 GB); 27–31B translators (17–19 GB)
 #   12gb  11–20 GB  both engines resident, whisper in int8 (≈ 8 GB); gemma4:12b-it-qat (7.2 GB)

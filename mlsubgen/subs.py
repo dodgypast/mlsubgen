@@ -17,7 +17,7 @@ from .work import temp_beside
 
 MIN_CUES = 10                         # fewer than this is not a dialogue track
 PARTIAL_RE = re.compile(r"sign|song|forced|commentary|karaoke|lyric|caption only", re.I)
-# container language tags (ISO 639-2 B/T, 639-1, names) → our codes — every one of config.LANG_NAMES (2026-10-02;
+# container language tags (ISO 639-2 B/T, 639-1, names) → our codes — every one of config.LANG_NAMES (2026-10-01;
 # the 17 languages added in 0.3.3 were missing, so their tracks were neither "already done" nor a transcript)
 _ISO3 = {"en": "eng", "ja": "jpn", "th": "tha", "zh": "zho chi cmn", "ko": "kor", "yue": "yue", "de": "ger deu",
          "fr": "fre fra", "es": "spa", "it": "ita", "pt": "por", "ru": "rus", "id": "ind", "vi": "vie", "tr": "tur",

@@ -1,4 +1,4 @@
-"""Speaker diarization — who spoke when (0.4.0, 2026-10-02).
+"""Speaker diarization — who spoke when (0.4.0, 2026-10-01).
 
 sherpa-onnx's offline pipeline: pyannote's segmentation-3.0 (MIT) exported to ONNX, a 3D-Speaker embedding model
 (Apache-2.0) and sherpa's clustering, all fetched from sherpa-onnx's GitHub releases — no account, no user
@@ -54,17 +54,20 @@ def available() -> tuple[bool, str]:
     return True, "ok"
 
 
-def diarize(audio: np.ndarray, num_speakers: int = 0, threshold: float | None = None,
-            progress: bool = False) -> list[Turn]:
-    """Speaker turns for a 16 kHz mono signal. num_speakers 0 = decide by clustering threshold (smaller = more
-    speakers). Speakers are renamed S1, S2 … in order of first appearance."""
+def build_config(num_speakers: int = 0, threshold: float | None = None):
+    """The sherpa-onnx diarization config (validated). Kept separate so the selftest can exercise the binding's
+    constructor signatures whenever the package is installed — 1.13.3's pyannote config takes only `model`, and
+    the `window_shift_ratio` of the upstream example belongs to another build (found 2026-10-01)."""
     import sherpa_onnx
     paths = model_paths()
     threshold = config.SPEAKER_THRESHOLD if threshold is None else threshold
+    try:
+        pyannote_cfg = sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(paths["segmentation"]),
+                                                                                 window_shift_ratio=0.1)
+    except TypeError:
+        pyannote_cfg = sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(paths["segmentation"]))
     cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(paths["segmentation"]),
-                                                                               window_shift_ratio=0.1)),
+        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(pyannote=pyannote_cfg),
         embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(paths["embedding"])),
         clustering=sherpa_onnx.FastClusteringConfig(num_clusters=num_speakers if num_speakers > 0 else -1,
                                                     threshold=threshold),
@@ -72,7 +75,15 @@ def diarize(audio: np.ndarray, num_speakers: int = 0, threshold: float | None = 
     )
     if not cfg.validate():
         raise RuntimeError("speaker diarization config invalid — are both model files present? (mlsubgen pull speakers)")
-    sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
+    return cfg
+
+
+def diarize(audio: np.ndarray, num_speakers: int = 0, threshold: float | None = None,
+            progress: bool = False) -> list[Turn]:
+    """Speaker turns for a 16 kHz mono signal. num_speakers 0 = decide by clustering threshold (smaller = more
+    speakers). Speakers are renamed S1, S2 … in order of first appearance."""
+    import sherpa_onnx
+    sd = sherpa_onnx.OfflineSpeakerDiarization(build_config(num_speakers, threshold))
     if sd.sample_rate != 16000:
         raise RuntimeError(f"the segmentation model wants {sd.sample_rate} Hz audio")
     samples = np.ascontiguousarray(audio, dtype=np.float32)

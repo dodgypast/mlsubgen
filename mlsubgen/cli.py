@@ -896,6 +896,20 @@ def cmd_bench(a: argparse.Namespace) -> int:
             for c in reference:
                 c.start -= clip[0]; c.end -= clip[0]
         ref_texts = align_reference(cues, reference)
+        # cue-boundary agreement with the human subtitler (0.4.0): a human breaks lines at speaker changes, so this
+        # is the measure that shows whether speaker labels moved our boundaries the right way
+        ref_ends = sorted(c.end for c in reference)
+        import bisect
+        tol = 0.4
+        near = 0
+        for c in cues:
+            i = bisect.bisect_left(ref_ends, c.end)
+            cands = [ref_ends[j] for j in (i - 1, i) if 0 <= j < len(ref_ends)]
+            if cands and min(abs(c.end - r) for r in cands) <= tol:
+                near += 1
+        agreement = 100.0 * near / max(1, len(cues))
+        _log(f"[bench] cue boundaries: {agreement:.0f}% of our {len(cues)} cue ends fall within {tol} s of one of the "
+             f"reference's {len(reference)} cue ends" + (f"  (speaker labels on: --speakers {job.speakers})" if speakers_wanted(job) else ""))
 
     results: dict[str, list[Cue]] = {}
     stats: dict[str, dict] = {}
@@ -1034,7 +1048,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     from .vad import Span, make_chunks, speech_ratio
     import tempfile
 
-    # hardware profiles (2026-10-02): the thresholds, forcing, and what each profile sets; the route assertions
+    # hardware profiles (2026-10-01): the thresholds, forcing, and what each profile sets; the route assertions
     # below are written for the full profile, so it is made active here whatever card this runs on
     assert config.pick_profile("auto", None) == "full" and config.pick_profile("auto", 24.0) == "full"
     assert config.pick_profile("auto", 12.0) == "12gb" and config.pick_profile("auto", 8.0) == "8gb" and config.pick_profile("auto", 16.0) == "12gb"
@@ -1196,7 +1210,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert [c.en for c in cs2] == ["EN 1", "OK let's go", "EN 3"] and fc2.calls == 2, ([c.en for c in cs2], fc2.calls)
     assert parse_targets("en, th") == ["en", "th"] and parse_targets(None) == config.DEFAULT_TARGETS.split(",")
     assert parse_targets("en,xx", warn=False) == ["en", "xx"], "an unknown code is passed through, not rejected"
-    # saved default languages (2026-10-02): settings.json beats the environment, clearing hands back to it; English
+    # saved default languages (2026-10-01): settings.json beats the environment, clearing hands back to it; English
     # is not required anywhere — a th,de default runs the same pipeline
     _orig = (config.SETTINGS_PATH, config.DEFAULT_TARGETS, config.DEFAULT_TARGETS_SOURCE)
     with tempfile.TemporaryDirectory() as d:
@@ -1230,7 +1244,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
            "Comment: 0,0:00:02.00,0:00:08.00,Default,,0,0,0,,private\n")
     ac = ass_to_cues(ass)
     assert [(c.start, c.end, c.text) for c in ac] == [(2.0, 8.0, "The town zoo\nis busy")], [(c.start, c.end, c.text) for c in ac]
-    # embedded tracks in every language (2026-10-02): tags and titles of the 0.3.3 languages are recognised, forced
+    # embedded tracks in every language (2026-10-01): tags and titles of the 0.3.3 languages are recognised, forced
     # and signs tracks never count, and the spoken language's track is the transcript before any other
     from .probe import SubTrack as _ST
     from .subs import LANG_TAGS as _LT, code_for_tag, pick as _pick, plan_embedded
@@ -1287,6 +1301,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert "speaker tag" not in sys_q, "no tags, no rule"
     assert clean_en("[S2] Good morning.") == "Good morning." and clean_en("[S2]Good morning.") == "Good morning."
     assert _spk.available()[0] or "sherpa-onnx" in _spk.available()[1] or "missing" in _spk.available()[1]
+    if _spk.available()[0]:                     # the binding's constructors, whenever the package and models are here
+        assert _spk.build_config(0, 0.5) is not None and _spk.build_config(4, None) is not None
     assert _models.resolve("speakers") and all(k == "url" for _, k, _ in _models.resolve("speakers"))
     assert "speakers" in _models.status("http://127.0.0.1:1") and len(_models.status("http://127.0.0.1:1")["speakers"]) == 2
     # worker readiness helpers

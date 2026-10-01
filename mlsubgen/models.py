@@ -1,4 +1,4 @@
-"""Model readiness and downloads — `mlsubgen pull` and the web UI's Models panel (2026-10-02).
+"""Model readiness and downloads — `mlsubgen pull` and the web UI's Models panel (2026-10-01).
 
 Two kinds of model: the translator LLMs live in Ollama (pulled through its /api/pull, streamed progress), the
 ASR models live in the Hugging Face cache (Qwen3-ASR-1.7B, Qwen3-ForcedAligner-0.6B, whisper large-v3 — downloaded
