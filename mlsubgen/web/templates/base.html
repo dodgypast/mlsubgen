@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}mlsubgen{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css?v={{ version }}">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">mlsubgen <small>{{ version }}</small></a>
+  <nav><a href="/">queue</a><a href="/skipped">skipped files</a><a id="nav-live" class="live hidden" href="/">live log</a></nav>
+  <div id="status" class="status" title="worker · LLM server · GPU">…</div>
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+<script src="/static/app.js?v={{ version }}"></script>
+{% block script %}{% endblock %}
+</body>
+</html>

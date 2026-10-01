@@ -1,0 +1,28 @@
+[Unit]
+Description=mlsubgen worker — runs queued subtitle jobs one at a time; jobs survive reboots
+# No mount / Ollama / GPU dependencies here on purpose: the worker checks readiness itself and waits for them.
+StartLimitIntervalSec=1h
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/mlsubgen
+# The folders the worker may run jobs on and the web folder picker may browse, colon-separated. EDIT THIS.
+# Network shares listed here must be mounted (fstab) before a job on them starts; the worker waits for them.
+Environment=MLSUBGEN_MEDIA_ROOTS=/path/to/your/videos
+# Default subtitle languages for every job (comma list; see `mlsubgen languages`); --target overrides per run.
+Environment=MLSUBGEN_TARGETS=en
+# The translator server: Ollama on this machine, or any OpenAI-compatible server (--backend openai).
+Environment=MLSUBGEN_LLM_URL=http://127.0.0.1:11434
+ExecStart=%h/mlsubgen/bin/mlsubgen serve
+Restart=always
+RestartSec=60
+# A stop (or a reboot) sends the worker SIGINT; it forwards one SIGINT to the running job — the same clean
+# interruption as Ctrl-C. The job goes back to the queue and resumes from its work files on the next start.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=120
+Nice=10
+
+[Install]
+WantedBy=default.target

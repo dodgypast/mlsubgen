@@ -1,0 +1,173 @@
+"""Defaults and translator presets. Everything here can be overridden from the command line."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+HOME = Path(os.path.expanduser("~"))
+MLSUBGEN_HOME = Path(os.environ.get("MLSUBGEN_HOME", HOME / "mlsubgen"))
+WORK_DIR = MLSUBGEN_HOME / "work"          # per-file transcript/translation cache; deleted once the .srt is written
+BENCH_DIR = MLSUBGEN_HOME / "bench"
+TMP_DIR = MLSUBGEN_HOME / "tmp"
+LOG_DIR = MLSUBGEN_HOME / "logs"           # skipped.log: every file a run skipped, with the reason
+DB_PATH = MLSUBGEN_HOME / "mlsubgen.db"       # the job queue (mlsubgen serve / jobs / cancel / retry)
+WORKER_LOCK = MLSUBGEN_HOME / "worker.lock"
+CODE_DIR = Path(__file__).resolve().parent.parent   # the checkout: subprocesses get it on PYTHONPATH (state may live elsewhere)
+DETECT_VERSION = 2            # bump when the language check or the VAD skip logic changes: remembered skips are retried
+JOB_MAX_FAILURES = 3          # a job that errors this many times is marked failed (interruptions do not count)
+JOB_RETRY_DELAY_SEC = 300
+JOB_READY_TIMEOUT_SEC = 1800  # how long a job may wait for its mounts / GPU / LLM server before it is failed
+WORKER_POLL_SEC = 30
+WEB_HOST = os.environ.get("MLSUBGEN_WEB_HOST", "0.0.0.0")   # `mlsubgen web` — LAN/Tailscale only, there is no login
+WEB_PORT = int(os.environ.get("MLSUBGEN_WEB_PORT", "8790"))
+
+VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".webm", ".wmv", ".flv"}
+
+# ── Languages ────────────────────────────────────────────────────────────────────────────────────────────
+# ISO code → the name Qwen3-ASR wants. Qwen speaks 30; these are the ones we name. Whisper takes the code.
+LANG_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese", "yue": "Cantonese", "ko": "Korean", "th": "Thai",
+              "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese", "ru": "Russian",
+              "id": "Indonesian", "vi": "Vietnamese", "tr": "Turkish", "hi": "Hindi", "ar": "Arabic", "nl": "Dutch",
+              "pl": "Polish", "cs": "Czech", "sv": "Swedish", "da": "Danish", "fi": "Finnish", "no": "Norwegian",
+              "hu": "Hungarian", "ro": "Romanian", "el": "Greek", "uk": "Ukrainian",
+              # 2026-10-01: more subtitle languages. Any code here is a target (the translator LLM writes it) and a
+              # source (decoded by whisper unless its aligner language is in ALIGNER_LANGS). Codes are whisper's.
+              "ms": "Malay", "tl": "Filipino", "fa": "Persian", "he": "Hebrew", "bn": "Bengali", "ta": "Tamil",
+              "km": "Khmer", "lo": "Lao", "my": "Burmese", "ca": "Catalan", "bg": "Bulgarian", "hr": "Croatian",
+              "sk": "Slovak", "sl": "Slovenian", "lt": "Lithuanian", "lv": "Latvian", "et": "Estonian"}
+# How each language names itself — what the web form shows next to the English name
+NATIVE_NAMES = {"ja": "日本語", "en": "English", "zh": "中文（简体）", "yue": "粵語（繁體）", "ko": "한국어", "th": "ไทย",
+                "fr": "Français", "de": "Deutsch", "es": "Español", "it": "Italiano", "pt": "Português", "ru": "Русский",
+                "id": "Bahasa Indonesia", "vi": "Tiếng Việt", "tr": "Türkçe", "hi": "हिन्दी", "ar": "العربية",
+                "nl": "Nederlands", "pl": "Polski", "cs": "Čeština", "sv": "Svenska", "da": "Dansk", "fi": "Suomi",
+                "no": "Norsk", "hu": "Magyar", "ro": "Română", "el": "Ελληνικά", "uk": "Українська",
+                "ms": "Bahasa Melayu", "tl": "Filipino", "fa": "فارسی", "he": "עברית", "bn": "বাংলা", "ta": "தமிழ்",
+                "km": "ខ្មែរ", "lo": "ລາວ", "my": "မြန်မာ", "ca": "Català", "bg": "Български", "hr": "Hrvatski",
+                "sk": "Slovenčina", "sl": "Slovenščina", "lt": "Lietuvių", "lv": "Latviešu", "et": "Eesti"}
+ALIGNER_LANGS = {"ja", "zh", "yue", "en", "ko", "fr", "de", "it", "pt", "ru", "es"}   # Qwen3-ForcedAligner — NOT Thai
+# which ASR engine decodes a chunk, by its detected language ("*" = everything else); --asr forces one engine
+ASR_ROUTES = {"*": "whisper", **{lang: "qwen" for lang in ALIGNER_LANGS}}
+# a file whose dominant language is not in this set is skipped (reason logged); --source LANG forces it through.
+# Every language we can name is a source: the detector's confidence is the gate, the layers below are language-agnostic
+SOURCE_LANGS = set(LANG_NAMES)
+DEFAULT_TARGETS = os.environ.get("MLSUBGEN_TARGETS", "en")   # comma list of subtitle languages to write; --target overrides
+                                                            # (the units / .env set it; "en,th" on the author's install)
+# (source, target) → translator preset; the most specific entry wins, "*" matches anything; -t forces one model
+TRANSLATE_ROUTES = {("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}
+
+# ── Language identification (LID) — decide the language, then decode ───────────────────────────────────────
+LID_VERSION = DETECT_VERSION
+LID_WINDOW_SPEECH_SEC = 10.0   # a detection window = consecutive VAD spans until this much SPEECH (not audio)
+LID_WINDOW_MAX_AUDIO_SEC = 30.0
+LID_SAMPLE_WINDOWS = 24        # first pass: this many windows spread over the file; every window if a 2nd language shows
+LID_CONFIDENT_SCORE = 1.0      # whisper prob (≤1) + Qwen agreement (0.5) + script evidence (0.7 / 0.3) must reach this
+LID_CONFIDENT_MARGIN = 0.4     # … and beat the runner-up by this
+LID_SWITCH_MIN_WINDOWS = 2     # a second language needs this many consecutive confident windows to count
+LID_MIN_SPEECH_SEC = 6.0       # less speech than this in the whole file: "no usable speech"
+
+# ── ASR ──────────────────────────────────────────────────────────────────────────────────────────────────
+ASR_ENGINE = "dual"                          # dual (both engines, LLM-merged) | auto (per chunk, ASR_ROUTES) | qwen | whisper
+ASR_VERSION = 5                              # part of the ASR cache key: bump when chunking, repair, fallback or merge changes
+COVER_QUIET_DB = 6.0                         # timeline coverage: a stretch this close to the noise floor …
+COVER_MIN_QUIET_SEC = 2.5                    # … for this long is silence and is skipped; everything else is decoded
+MERGE_AGREE = 0.92                           # dual mode: chunks whose two transcripts agree at least this much need no LLM
+MERGE_MIN_CHARS = 4                          # … and the LLM is only asked when both sides have at least this much text
+ASR_RETRY_DENSITY = 3.0                      # a chunk with fewer characters than this per second of VAD speech in it
+                                             # (given ≥ ASR_RETRY_MIN_SPEECH s of speech) came back thin: the other engine
+                                             # decodes it again — an LLM decoder can emit nothing over music, a whisper
+                                             # window can drop out; the two fail differently
+ASR_RETRY_MIN_SPEECH = 3.0
+ALIGN_SEC_PER_CHAR = 0.2                     # re-timing a collapsed run: this long per character when room allows
+ALIGN_MAX_WORD_SEC = 3.0                     # a single word longer than this is an aligner artefact
+ASR_MODEL_QWEN = "Qwen/Qwen3-ASR-1.7B"       # alt: neosophie/Qwen3-ASR-1.7B-JA (proper-noun fine-tune)
+ALIGNER_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
+ASR_MODEL_WHISPER = "large-v3"                # the full model: turbo's 4-layer decoder is large-v2 quality, worse on Thai         # faster-whisper name; large-v3 is the slower/stronger sibling
+ASR_LANGUAGE_QWEN = "Japanese"
+ASR_LANGUAGE_WHISPER = "ja"
+
+# ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
+VAD_THRESHOLD = 0.5
+VAD_MIN_SILENCE_MS = 300
+VAD_MIN_SPEECH_MS = 200
+VAD_SPEECH_PAD_MS = 150
+CHUNK_MAX_SEC = 30.0           # the operating point every Qwen3-ASR integration uses and its benchmarks were run at:
+                               # ≤ 30 s at VAD boundaries. Longer chunks make the decoder skim or go silent over music
+                               # and the forced aligner collapse (half the words of a sparse film)
+CHUNK_BREAK_SILENCE_SEC = 2.0  # a silence this long closes a chunk — once the chunk is at least CHUNK_MIN_SEC long
+CHUNK_MIN_SEC = 6.0            # no 1-second orphan chunks: an isolated span joins its neighbour instead …
+CHUNK_MAX_GAP_SEC = 30.0       # … unless the gap is this long (the decoder must not be fed minutes of silence)
+CHUNK_PAD_SEC = 0.25
+
+# ── Cue segmentation (Japanese side) ─────────────────────────────────────────────────────────────────────
+CUE_MAX_SEC = 6.0
+CUE_MAX_CHARS_JA = 34
+CUE_GAP_SPLIT_SEC = 0.6
+CUE_MIN_SEC = 0.9
+
+# ── Subtitle typesetting (English side) ──────────────────────────────────────────────────────────────────
+SRT_MAX_LINE_CHARS = 42
+SRT_MAX_LINE_CHARS_BY_LANG = {"th": 50, "ja": 30, "zh": 30, "yue": 30, "ko": 34,   # narrower glyphs / no word spaces
+                              "km": 50, "lo": 50, "my": 50}                         # no word spaces, like Thai
+SRT_MAX_LINES = 2
+SRT_MIN_DUR = 1.0
+SRT_MAX_DUR = 7.0
+SRT_MIN_GAP = 0.083          # 2 frames at 24 fps
+SRT_MAX_CPS = 21.0           # reading speed ceiling; cues are stretched into the following gap when faster
+SRT_MAX_CPS_BY_LANG = {"ja": 8.0, "zh": 9.0, "yue": 9.0, "ko": 12.0}   # a CJK character carries more than a letter
+
+# ── Translation ──────────────────────────────────────────────────────────────────────────────────────────
+LLM_BACKEND = "ollama"                       # ollama | openai   (openai = any /v1/chat/completions server)
+LLM_URL = os.environ.get("MLSUBGEN_LLM_URL", "http://127.0.0.1:11434")
+LLM_NUM_CTX = 8192
+LLM_TEMPERATURE = 0.2
+LLM_TIMEOUT_SEC = 900
+WINDOW_CUES = 20              # cues per request
+CONTEXT_BEFORE = 8            # already-translated cue pairs shown before the window
+LOOKAHEAD_AFTER = 3           # untranslated cues shown after the window (coherence only)
+
+
+@dataclass
+class Translator:
+    name: str
+    model: str
+    backend: str = "ollama"
+    url: str = ""
+    prompt_style: str = "generic"   # generic | translategemma
+    think: bool = False
+    note: str = ""
+    num_ctx: int = LLM_NUM_CTX
+    temperature: float = LLM_TEMPERATURE
+    extra_options: dict = field(default_factory=dict)
+
+
+TRANSLATORS: dict[str, Translator] = {
+    # Newest dense Qwen (Aug 2026). Reasoning model — thinking is switched off for translation.
+    "qwen3.8": Translator("qwen3.8", "qwen3.8:27b", note="Qwen3.8-27B q4_K_M, 18 GB, 256K ctx, Apache-2.0", think=False),
+    # Gemma 4 31B, quantisation-aware-trained 4-bit (19 GB) — dense, slower, strong multilingual.
+    "gemma4": Translator("gemma4", "gemma4:31b-it-qat", note="Gemma 4 31B QAT, 19 GB, Apache-2.0", think=False),
+    # Google's translation-specialised Gemma 3 (55 languages). Fixed prompt format; no instructions beyond 'translate'.
+    "translategemma": Translator("translategemma", "translategemma:27b", prompt_style="translategemma",
+                                 note="TranslateGemma 27B q4_K_M, 17 GB — translation-only model"),
+    # Fast MoE fallback: JP-TL-Bench LT 9.56 (above GPT-4o), ~3B active params.
+    "qwen3-30b": Translator("qwen3-30b", "qwen3:30b-a3b-instruct-2507-q4_K_M", note="Qwen3-30B-A3B-Instruct-2507, ~18 GB, fast", think=False),
+}
+DEFAULT_TRANSLATOR = "qwen3.8"
+
+# Japanese phrases Whisper-family and Qwen models emit over music/silence (the YouTube tail). Only applied when the
+# VAD says there was little or no speech under the cue.
+HALLUCINATION_PATTERNS = [
+    r"ご視聴ありがとうございました",
+    r"ご視聴いただき",
+    r"チャンネル登録",
+    r"字幕(は|：|:)",
+    r"最後までご覧",
+    r"おやすみなさい[。！]?$",
+    r"^ありがとうございました[。！]?$",
+    r"^(ん+|あ+|え+|う+|は+)[。、]?$",
+]
+MIN_SPEECH_RATIO = 0.15       # below this VAD coverage a cue is suspect: kept only if it looks and sounds like speech
+QUIET_MAX_CPS = 20.0          # … a suspect cue faster than this (chars/s) is a hallucination
+QUIET_MAX_SEC = 8.0           # … or longer than this
+QUIET_MIN_DB = 6.0            # … or with less than this above the file's noise floor under it
+BLACKLIST_SPEECH_RATIO = 0.5  # a blacklisted phrase survives only if the VAD saw real speech under it

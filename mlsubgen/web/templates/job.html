@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}job {{ job.id }} — mlsubgen{% endblock %}
+{% block body %}
+<section class="card">
+  <h2>Job {{ job.id }} <span id="job-status" class="pill {{ job.status }}">{{ job.status }}</span></h2>
+  <div class="kv">
+    <div><b>command</b><code>mlsubgen {{ job.label }}</code></div>
+    <div><b>created</b>{{ job.created }}</div>
+    <div><b>progress</b><span id="job-progress">—</span></div>
+    <div><b>started</b><span id="job-started">{{ job.started or "—" }}</span></div>
+    <div><b>attempts</b><span id="job-attempts">{{ job.attempts }}</span></div>
+    <div><b>note</b><span id="job-note">{{ job.note or "—" }}</span></div>
+    <div><b>log</b><code id="job-log-path">{{ job.log or "— not started" }}</code></div>
+  </div>
+  <div class="actions">
+    <button id="pause" data-id="{{ job.id }}" title="stop now and hold the job — it stays paused across reboots, and resumes from its work files (an --overwrite job carries on where it stopped)">Pause</button>
+    <button id="resume" data-id="{{ job.id }}" title="put a paused job back in the queue">Resume</button>
+    <button id="cancel" data-id="{{ job.id }}" class="secondary">Cancel</button>
+    <button id="retry" data-id="{{ job.id }}" class="secondary">Retry / run again</button>
+    <span id="action-result" class="muted"></span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Files <small class="muted" id="files-note"></small></h2>
+  <table id="files"><thead><tr><th>file</th><th>status</th><th>detail</th></tr></thead><tbody></tbody></table>
+</section>
+
+<section class="card">
+  <h2>Log <small class="muted" id="log-note">live</small></h2>
+  <pre id="log" class="log"></pre>
+</section>
+{% endblock %}
+{% block script %}<script>mlsubgenJob({{ job.id }});</script>{% endblock %}

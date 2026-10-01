@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlsubgen"
+dynamic = ["version"]
+description = "Subtitles for videos, entirely on your own machine: language detection, dual-engine ASR, LLM translation into 45 languages"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "Duncan Morison" }]
+keywords = ["subtitles", "srt", "asr", "whisper", "qwen3-asr", "translation", "ollama", "japanese", "thai"]
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+  "Environment :: GPU :: NVIDIA CUDA",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Multimedia :: Video",
+]
+# The pins match requirements.txt — the versions the project was validated with. torch / torchaudio come from the
+# CUDA wheel index (see setup.sh and the Dockerfile) and are deliberately not listed here.
+dependencies = [
+  "qwen-asr==0.0.6",
+  "transformers==4.57.6",
+  "silero-vad==6.2.1",
+  "soundfile==0.14.0",
+  "numpy==2.5.3",
+  "sacrebleu==2.6.0",
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+  "jinja2==3.1.6",
+  "python-multipart==0.0.32",
+  "faster-whisper==1.2.1",
+]
+
+[project.scripts]
+mlsubgen = "mlsubgen.cli:main"
+
+[project.urls]
+Homepage = "https://morisonics.com"
+Repository = "https://github.com/dodgypast/mlsubgen"
+Issues = "https://github.com/dodgypast/mlsubgen/issues"
+
+[tool.setuptools]
+packages = ["mlsubgen", "mlsubgen.web"]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "mlsubgen.__version__" }
+
+[tool.setuptools.package-data]
+"mlsubgen.web" = ["templates/*.html", "static/*"]

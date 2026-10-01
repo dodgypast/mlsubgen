@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}skipped files — mlsubgen{% endblock %}
+{% block body %}
+<section class="card">
+  <h2>Skipped files <small class="muted">{{ skipped|length }} — latest verdict per file, from skipped.log</small></h2>
+  <form method="post" action="/api/skipped/queue" id="skipform">
+    <div class="row actions">
+      <input id="filter" placeholder="filter by name, folder or reason" spellcheck="false">
+      <label><input type="checkbox" id="selall"> select all shown</label>
+      <label><input type="checkbox" name="assume_ja" value="1"> force Japanese (--source ja) — leave off to let the new detector decide</label>
+      <button type="submit">Queue selected</button>
+      <span class="muted">files that meanwhile have an .srt are greyed out</span>
+    </div>
+    <table id="skipped">
+      <thead><tr><th></th><th>when</th><th>file</th><th>reason</th><th>×</th></tr></thead>
+      <tbody>
+      {% for s in skipped %}
+      <tr class="{% if s.has_srt %}has-srt{% endif %}" data-text="{{ (s.path ~ ' ' ~ s.reason)|lower }}">
+        <td><input type="checkbox" name="paths" value="{{ s.path }}" {% if s.has_srt %}disabled{% endif %}></td>
+        <td class="nowrap">{{ s.when }}</td>
+        <td title="{{ s.path }}"><b>{{ s.name }}</b><br><span class="muted">{{ s.path.rsplit('/', 1)[0] }}</span></td>
+        <td>{{ s.reason }}</td>
+        <td>{{ s.n }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+</section>
+{% endblock %}
+{% block script %}<script>mlsubgenSkipped();</script>{% endblock %}

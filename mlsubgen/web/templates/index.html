@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="card">
+  <h2>New job</h2>
+  <form id="newjob" method="post" action="/api/jobs">
+    <div class="row">
+      <label>Folder or file(s)</label>
+      <input name="path" id="path" placeholder="/…" value="{{ last_folder }}" spellcheck="false">
+      <button type="button" id="browse-toggle" class="secondary">browse</button>
+      <span id="picked-note" class="muted"></span>
+    </div>
+    <div id="browser" class="browser hidden">
+      <div class="crumbs"><span id="cwd"></span> <span id="counts" class="muted"></span>
+        <span class="muted"> — click a folder to open it, a file name to pick just that file, tick several files for one job</span></div>
+      <ul id="dirs"></ul>
+      <ul id="files" class="files"></ul>
+    </div>
+    <div id="picked"></div>
+    <div class="row wrap">
+      <label>Subtitles in</label>
+      <details class="dropdown" id="targets-dd">
+        <summary><span id="targets-summary">{% for code, name, native in langs if code in default_targets %}{{ name }}{% if not loop.last %}, {% endif %}{% endfor %}</span> <span class="caret">&#9662;</span></summary>
+        <div class="menu">
+          <div class="menu-tools"><button type="button" class="small secondary" id="targets-none">none</button>
+            <span class="muted">one .srt per ticked language — <code>&lt;video&gt;.&lt;code&gt;.srt</code></span></div>
+          <div class="menu-grid">
+            {% for code, name, native in langs %}<label title="{{ code }}"><input type="checkbox" name="target_{{ code }}" value="1" data-name="{{ name }}" {% if code in default_targets %}checked{% endif %}> {{ name }}{% if native and native != name %} <span class="muted">{{ native }}</span>{% endif %}</label>
+            {% endfor %}
+          </div>
+        </div>
+      </details>
+      <label>Spoken language</label>
+      <select name="source" title="auto = detect per stretch of speech; pick one only to override the detector">
+        <option value="auto">auto-detect (per stretch of speech)</option>
+        {% for code, name in sources %}<option value="{{ code }}">force {{ name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="row wrap">
+      <label>Translator</label>
+      <select name="translator" title="by language pair unless forced">
+        <option value="auto">auto — by language pair ({% for pair, m in routes %}{{ pair }} {{ m }}{% if not loop.last %}, {% endif %}{% endfor %})</option>
+        {% for t in translators %}<option value="{{ t }}">force {{ t }} for every pair</option>{% endfor %}
+      </select>
+      <label>ASR engine</label>
+      <select name="asr" title="dual = both engines on every chunk, reconciled by the translator LLM">
+        <option value="dual">dual — Qwen3-ASR + whisper large-v3 on every chunk, the LLM reconciles (default)</option>
+        <option value="auto">auto — one engine per chunk: Qwen where its aligner covers the language, whisper elsewhere</option>
+        <option value="qwen">Qwen3-ASR only</option>
+        <option value="whisper">whisper large-v3 only</option>
+      </select>
+      <label>Embedded subtitles</label>
+      <select name="subs">
+        <option value="auto">auto — an embedded target language is left alone; a Japanese (else English/…) text track is the transcript</option>
+        <option value="ja">ja — ignore embedded target tracks, make our own translation</option>
+        <option value="ignore">ignore — always transcribe the audio</option>
+      </select>
+      <label>Batch</label>
+      <input name="batch" value="10" size="3" title="files per ASR-then-translate round; 0 = all ASR first">
+    </div>
+    <div class="row wrap checks">
+      <label><input type="checkbox" name="overwrite" value="1"> --overwrite <span class="muted">redo files that already have the .srt</span></label>
+      <label><input type="checkbox" name="keep_work" value="1"> --keep-work <span class="muted">keep the ASR cache after the .srt</span></label>
+      <label><input type="checkbox" name="keep_source" value="1"> --keep-source <span class="muted">also write the transcript in the spoken language</span></label>
+      <label><input type="checkbox" name="no_recursive" value="1"> --no-recursive</label>
+      <label><input type="checkbox" name="force_translate" value="1"> --force-translate</label>
+    </div>
+    <div class="row wrap">
+      <label>Context</label>
+      <input name="context" placeholder="what the programme is about, names, terms (biases ASR and translation)">
+      <label>Genre</label>
+      <input name="genre" placeholder="{{ default_genre }}">
+    </div>
+    <div class="row">
+      <label>Glossary</label>
+      <textarea name="glossary" rows="2" placeholder="日本語&#9;English — one pair per line (tab or =)"></textarea>
+    </div>
+    <div class="row">
+      <label>Extra options</label>
+      <input name="extra" placeholder="anything else for `mlsubgen run`, e.g. --audio-track 1 --window 30" spellcheck="false">
+    </div>
+    <div class="row actions">
+      <button type="submit">Queue</button>
+      <button type="button" id="preview" class="secondary">Preview (dry run)</button>
+      <span id="preview-status" class="muted"></span>
+    </div>
+    <pre id="preview-out" class="hidden"></pre>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Queue <small class="muted" id="queue-note"></small>
+    <button class="secondary small" id="purge" title="drop failed and cancelled jobs from this list (logs stay)">clear cancelled/failed</button>
+    <button class="secondary small" id="purge-done" title="drop every finished job, done ones included">clear finished</button></h2>
+  <table id="jobs">
+    <thead><tr><th>id</th><th>status</th><th>tries</th><th>started</th><th>job</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+{% endblock %}
+{% block script %}<script>mlsubgenIndex();</script>{% endblock %}

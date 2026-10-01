@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.pyc
+work
+tmp
+logs
+bench
+data
+models
+glossaries
+*.db
+*.db-wal
+*.db-shm
+worker.lock
+run-*.log
+.env

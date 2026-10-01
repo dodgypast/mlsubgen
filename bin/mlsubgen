@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# mlsubgen launcher — `cd` into a folder and run `mlsubgen`: every video below it gets a <video>.en.srt.
+# Any arguments are passed through (`mlsubgen bench …`, `mlsubgen -t gemma4`, `mlsubgen tracks FILE`).
+export PYTHONPATH="$HOME/mlsubgen${PYTHONPATH:+:$PYTHONPATH}"
+# The ASR models live in the HF cache; without this, huggingface_hub phones home on every start and a DNS/WAN
+# outage (2026-09-12 power cut) kills the run before the first file. Set MLSUBGEN_ONLINE=1 to allow a model download.
+if [ -z "$MLSUBGEN_ONLINE" ] && [ -d "$HOME/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B" ]; then
+  export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+fi
+exec "$HOME/mlsubgen/.venv/bin/python" -m mlsubgen "$@"

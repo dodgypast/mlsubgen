@@ -1,0 +1,14 @@
+.venv/
+work/
+tmp/
+logs/
+bench/
+glossaries/
+data/
+models/
+__pycache__/
+*.pyc
+mlsubgen.db*
+worker.lock
+run-*.log
+.env

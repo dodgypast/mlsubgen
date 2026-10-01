@@ -1,0 +1,58 @@
+# mlsubgen — the queue worker and the web UI, from one image built here.
+#
+#   cp .env.example .env    # edit MEDIA_DIR (your videos) and the defaults
+#   mkdir -p data models    # created by you, so the containers (your uid) can write them
+#   docker compose up -d --build
+#
+# Needs the NVIDIA Container Toolkit (`gpus: all`) and Ollama on this host with a translator model pulled
+# (`ollama pull qwen3.8:27b`). Host networking: the containers reach Ollama at 127.0.0.1:11434 and the web UI
+# listens on port 8790 — there is no login, so keep it on a LAN or VPN address.
+#
+# Media: MEDIA_DIR is bind-mounted at /media (rslave, so a share mounted after start still appears) and
+# MLSUBGEN_MEDIA_ROOTS tells the worker and the folder picker that /media is the place. More shares = more
+# bind blocks here + more paths in MLSUBGEN_MEDIA_ROOTS (colon-separated, container paths).
+#
+# Stopping the worker sends SIGINT and waits stop_grace_period: the running job is interrupted cleanly, goes back
+# to `queued`, and resumes from its checkpoints on the next start.
+name: mlsubgen
+
+x-common: &common
+  build:
+    context: .
+    args:
+      UID: ${PUID:-1000}
+      GID: ${PGID:-1000}
+  image: mlsubgen:latest
+  user: "${PUID:-1000}:${PGID:-1000}"
+  network_mode: host
+  restart: unless-stopped
+  gpus: all
+  env_file: .env
+  environment:
+    MLSUBGEN_HOME: /data
+    HF_HOME: /models
+    HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+    TRANSFORMERS_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+  volumes:
+    - ./data:/data
+    - ${MODELS_DIR:-./models}:/models
+    - type: bind
+      source: ${MEDIA_DIR:?set MEDIA_DIR in .env to the folder with your videos}
+      target: /media
+      bind:
+        propagation: rslave
+
+services:
+  worker:
+    <<: *common
+    container_name: mlsubgen-worker
+    command: ["serve"]
+    stop_signal: SIGINT
+    stop_grace_period: 120s
+
+  web:
+    <<: *common
+    container_name: mlsubgen-web
+    command: ["web"]
+    depends_on:
+      - worker

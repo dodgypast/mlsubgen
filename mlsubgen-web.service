@@ -1,0 +1,20 @@
+[Unit]
+Description=mlsubgen web — the browser front end over the job queue (http://<this host>:8790, LAN only, no login)
+StartLimitIntervalSec=1h
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/mlsubgen
+# Same values as in mlsubgen-worker.service. EDIT THESE.
+Environment=MLSUBGEN_MEDIA_ROOTS=/path/to/your/videos
+Environment=MLSUBGEN_TARGETS=en
+Environment=MLSUBGEN_LLM_URL=http://127.0.0.1:11434
+# Bind to a LAN or VPN address only — there is no authentication: MLSUBGEN_WEB_HOST=0.0.0.0 (default), port 8790.
+ExecStart=%h/mlsubgen/bin/mlsubgen web
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=default.target
