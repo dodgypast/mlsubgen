@@ -51,8 +51,57 @@ ASR_ROUTES = {"*": "whisper", **{lang: "qwen" for lang in ALIGNER_LANGS}}
 # a file whose dominant language is not in this set is skipped (reason logged); --source LANG forces it through.
 # Every language we can name is a source: the detector's confidence is the gate, the layers below are language-agnostic
 SOURCE_LANGS = set(LANG_NAMES)
-DEFAULT_TARGETS = os.environ.get("MLSUBGEN_TARGETS", "en")   # comma list of subtitle languages to write; --target overrides
-                                                            # (the units / .env set it; "en,th" on the author's install)
+# ── Default subtitle languages ───────────────────────────────────────────────────────────────────────────
+# Precedence: --target on a run  >  settings.json (set from the CLI: `mlsubgen config targets en,th`, or the web
+# form's "make these the default")  >  MLSUBGEN_TARGETS in the environment (the units / .env)  >  "en".
+# Nothing in the pipeline needs English to be among them: every route, rule and file name is per target.
+SETTINGS_PATH = MLSUBGEN_HOME / "settings.json"
+
+
+def load_settings() -> dict:
+    import json
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data: dict) -> None:
+    import json
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(SETTINGS_PATH)
+
+
+def _targets_from(settings: dict) -> tuple[str, str]:
+    """(comma list, where it came from)."""
+    saved = settings.get("targets")
+    if isinstance(saved, list) and saved:
+        return ",".join(str(t).strip().lower() for t in saved if str(t).strip()), "settings"
+    env = os.environ.get("MLSUBGEN_TARGETS", "").strip()
+    if env:
+        return env, "environment"
+    return "en", "built-in"
+
+
+DEFAULT_TARGETS, DEFAULT_TARGETS_SOURCE = _targets_from(load_settings())
+
+
+def set_default_targets(codes: list[str] | None) -> tuple[str, str]:
+    """Persist the default subtitle languages (None / [] clears the saved value, so the environment or the built-in
+    default applies again) and make them current in this process. Returns (comma list, source)."""
+    global DEFAULT_TARGETS, DEFAULT_TARGETS_SOURCE
+    data = load_settings()
+    codes = [c.strip().lower() for c in (codes or []) if c.strip()]
+    if codes:
+        data["targets"] = list(dict.fromkeys(codes))
+    else:
+        data.pop("targets", None)
+    save_settings(data)
+    DEFAULT_TARGETS, DEFAULT_TARGETS_SOURCE = _targets_from(data)
+    return DEFAULT_TARGETS, DEFAULT_TARGETS_SOURCE
 # (source, target) → translator preset; the most specific entry wins, "*" matches anything; -t forces one model.
 # Filled in from the hardware profile below (apply_profile) — see PROFILES.
 TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}

@@ -125,6 +125,14 @@ function mlsubgenIndex() {
     };
     dd.addEventListener("change", summarise);
     $("#targets-none").addEventListener("click", () => { dd.querySelectorAll("input[type=checkbox]").forEach(c => c.checked = false); summarise(); });
+    $("#targets-default").addEventListener("click", async () => {
+      const codes = [...dd.querySelectorAll("input[type=checkbox]:checked")].map(c => c.name.replace(/^target_/, ""));
+      if (!codes.length) { alert("tick at least one language first"); return; }
+      try {
+        const r = await api("/api/settings", { method: "POST", body: new URLSearchParams({ targets: codes.join(",") }) });
+        $("#targets-default-note").textContent = `default now: ${r.targets.join(", ")} (saved)`;
+      } catch (err) { alert("could not save the default: " + err.message); }
+    });
     document.addEventListener("click", e => { if (dd.open && !dd.contains(e.target)) dd.open = false; });
     summarise();
   }

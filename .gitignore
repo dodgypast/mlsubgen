@@ -10,5 +10,6 @@ __pycache__/
 *.pyc
 mlsubgen.db*
 worker.lock
+settings.json
 run-*.log
 .env

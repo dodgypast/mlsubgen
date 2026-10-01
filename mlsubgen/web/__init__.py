@@ -76,7 +76,9 @@ def build_opts(f: dict) -> list[str]:
     extra_t = (f.get("targets") or "").strip()
     if extra_t:
         targets += [t.strip().lower() for t in extra_t.split(",") if t.strip() and t.strip().lower() not in targets]
-    if targets and ",".join(targets) != config.DEFAULT_TARGETS:
+    if not targets:
+        raise HTTPException(400, "tick at least one subtitle language")
+    if ",".join(targets) != config.DEFAULT_TARGETS:
         opts += ["--target", ",".join(targets)]
     src = (f.get("source") or "auto").strip()
     if src and src != "auto":
@@ -310,7 +312,9 @@ def read_skipped() -> list[dict]:
         latest[path] = {"when": when, "path": path, "name": Path(path).name, "reason": reason,
                         "language": reason.startswith("audio is ") or reason.startswith("language could not"),
                         "n": latest.get(path, {}).get("n", 0) + 1,
-                        "has_srt": Path(path).with_name(Path(path).stem + ".en.srt").exists()}
+                        # a subtitle in any of the default languages — English is not special (2026-10-02)
+                        "has_srt": any(Path(path).with_name(f"{Path(path).stem}.{t}.srt").exists()
+                                       for t in config.DEFAULT_TARGETS.split(","))}
     return sorted(latest.values(), key=lambda d: d["when"], reverse=True)
 
 
@@ -483,6 +487,26 @@ def create_app() -> FastAPI:
             return {"result": jobs.resume(conn, job_id)}
         finally:
             conn.close()
+
+    @app.get("/api/settings")
+    def api_settings():
+        return {"targets": config.DEFAULT_TARGETS.split(","), "targets_source": config.DEFAULT_TARGETS_SOURCE,
+                "profile": config.PROFILE, "settings_path": str(config.SETTINGS_PATH)}
+
+    @app.post("/api/settings")
+    async def api_settings_set(request: Request):
+        """Save the default subtitle languages (the form's "make these the default"); an empty list clears the
+        saved value so the environment or the built-in default applies again. The worker's jobs read the file
+        when they start, so the next job uses the new default without a restart."""
+        form = await request.form()
+        raw = (form.get("targets") or "").strip()
+        codes = [t.strip().lower() for t in raw.replace(";", ",").split(",") if t.strip()]
+        unknown = [c for c in codes if c not in config.LANG_NAMES]
+        if unknown:
+            raise HTTPException(400, f"unknown language code(s): {', '.join(unknown)}")
+        val, src = config.set_default_targets(codes)
+        return {"targets": val.split(","), "targets_source": src,
+                "result": f"default subtitle languages: {val}" + ("" if codes else f" ({src})")}
 
     @app.get("/api/models")
     def api_models():

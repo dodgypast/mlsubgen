@@ -96,6 +96,7 @@ mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
 mlsubgen languages               # the 45 codes, their native names, which engine decodes each
+mlsubgen config targets th,de    # save the default languages (the web form has "make these the default");  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
 mlsubgen pull                    # download what a default run needs;  pull gemma4 · pull some/tag:latest · pull --all
 mlsubgen jobs                    # the queue;  mlsubgen log ID · pause ID · resume ID · cancel ID · retry ID
@@ -175,7 +176,7 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 |---|---|---|
 | `MLSUBGEN_HOME` | `~/mlsubgen` (`/data` in Docker) | state: work files, logs, the queue database |
 | `MLSUBGEN_MEDIA_ROOTS` | *(none — set it)* | colon-separated folders the worker and the picker may use |
-| `MLSUBGEN_TARGETS` | `en` | default subtitle languages |
+| `MLSUBGEN_TARGETS` | `en` | default subtitle languages — a saved setting (`mlsubgen config targets …` or the web form's *make these the default*, kept in `settings.json` under `MLSUBGEN_HOME`) beats it; `--target` on a run beats both. English need not be among them: every route, rule and file name is per target. |
 | `MLSUBGEN_LLM_URL` | `http://127.0.0.1:11434` | the translator server |
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
 | `MLSUBGEN_PROFILE` | `auto` | `full`, `12gb` or `8gb` — see Requirements |

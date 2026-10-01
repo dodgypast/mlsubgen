@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 import time
@@ -166,6 +167,7 @@ COMMANDS
   models      pull       download models: mlsubgen pull | pull gemma4 | pull some/ollama:tag | pull asr | pull --all
               models     what is ready — translator presets in Ollama, ASR models in the Hugging Face cache
               languages  the {len(config.LANG_NAMES)} subtitle languages: code, name, native name, which engine decodes it
+  settings    config     the settings and where they come from;  config targets en,th  saves the default languages
               tracks     the audio and subtitle tracks of a file, and which audio track would be used
   queue       jobs       the queue of the worker service (--all for every job)
               log ID · pause ID · resume ID · cancel ID · retry ID · purge [--done] [ID ...]
@@ -214,7 +216,7 @@ HARDWARE PROFILES   (picked from the GPU's memory; MLSUBGEN_PROFILE=... or --pro
   8gb    under 11 GB    one ASR engine on the card at a time; gemma4:e4b-it-qat (6.1 GB) for every pair
   The smaller translators are weaker (most of all for Japanese → English): mlsubgen bench shows by how much.
 
-ENVIRONMENT
+ENVIRONMENT   (a saved setting — mlsubgen config, or the web form's "make these the default" — beats the environment)
   MLSUBGEN_TARGETS       default subtitle languages (comma list)        MLSUBGEN_LLM_URL   translator server (Ollama)
   MLSUBGEN_MEDIA_ROOTS   folders the worker and the web picker may use (colon-separated)
   MLSUBGEN_HOME          state: work files, logs, the queue               MLSUBGEN_WEB_HOST / MLSUBGEN_WEB_PORT
@@ -930,6 +932,31 @@ def cmd_models(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(a: argparse.Namespace) -> int:
+    """`mlsubgen config` shows the settings that matter and where each comes from; `mlsubgen config targets en,th`
+    saves the default subtitle languages (the web form's "make these the default" does the same); `--clear` forgets
+    the saved value so the environment or the built-in default applies again."""
+    if a.key == "targets":
+        if a.clear:
+            val, src = config.set_default_targets(None)
+            print(f"saved default cleared; default subtitle languages are now {val} ({src})")
+            return 0
+        if a.value:
+            codes = parse_targets(a.value)
+            val, src = config.set_default_targets(codes)
+            print(f"default subtitle languages: {val} (saved in {config.SETTINGS_PATH}; --target on a run still overrides)")
+            return 0
+    print(f"{'default subtitle languages':<30} {config.DEFAULT_TARGETS:<24} from {config.DEFAULT_TARGETS_SOURCE}")
+    print(f"{'profile':<30} {config.PROFILE:<24} " + (f"{config.VRAM_GB:.0f} GB GPU detected" if config.VRAM_GB else "no GPU detected")
+          + (" (MLSUBGEN_PROFILE)" if os.environ.get("MLSUBGEN_PROFILE") else " (auto)"))
+    print(f"{'translator server':<30} {config.LLM_URL}")
+    print(f"{'media roots':<30} {os.environ.get('MLSUBGEN_MEDIA_ROOTS') or '(not set — every path allowed from the CLI)'}")
+    print(f"{'state (MLSUBGEN_HOME)':<30} {config.MLSUBGEN_HOME}")
+    print(f"{'settings file':<30} {config.SETTINGS_PATH}{'' if config.SETTINGS_PATH.exists() else ' (none yet)'}")
+    print("\nset:  mlsubgen config targets en,th      clear:  mlsubgen config targets --clear")
+    return 0
+
+
 def cmd_pull(a: argparse.Namespace) -> int:
     """Download models ahead of the first run: `mlsubgen pull` = the ASR models + the translators of the default
     routes; names = presets, Ollama tags, ASR labels, 'asr', 'defaults'; --all = every preset too."""
@@ -1114,6 +1141,17 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert [c.en for c in cs2] == ["EN 1", "OK let's go", "EN 3"] and fc2.calls == 2, ([c.en for c in cs2], fc2.calls)
     assert parse_targets("en, th") == ["en", "th"] and parse_targets(None) == config.DEFAULT_TARGETS.split(",")
     assert parse_targets("en,xx", warn=False) == ["en", "xx"], "an unknown code is passed through, not rejected"
+    # saved default languages (2026-10-02): settings.json beats the environment, clearing hands back to it; English
+    # is not required anywhere — a th,de default runs the same pipeline
+    _orig = (config.SETTINGS_PATH, config.DEFAULT_TARGETS, config.DEFAULT_TARGETS_SOURCE)
+    with tempfile.TemporaryDirectory() as d:
+        config.SETTINGS_PATH = Path(d) / "settings.json"
+        val, src = config.set_default_targets(["th", "DE ", "th"])
+        assert (val, src) == ("th,de", "settings") and parse_targets(None) == ["th", "de"], (val, src)
+        assert config.load_settings()["targets"] == ["th", "de"] and config.SETTINGS_PATH.exists()
+        val, src = config.set_default_targets(None)
+        assert src in ("environment", "built-in") and not config.load_settings().get("targets"), (val, src)
+    config.SETTINGS_PATH, config.DEFAULT_TARGETS, config.DEFAULT_TARGETS_SOURCE = _orig
     # more subtitle languages (2026-10-01): every code has a native name; CJK targets keep their punctuation and get
     # their own reading speed; cluster-safe cuts work for any script, not just Thai
     assert all(c in config.NATIVE_NAMES for c in config.LANG_NAMES), [c for c in config.LANG_NAMES if c not in config.NATIVE_NAMES]
@@ -1257,6 +1295,11 @@ def main(argv: list[str] | None = None) -> int:
     m.set_defaults(fn=cmd_models)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.set_defaults(fn=cmd_languages)
+    cf = sub.add_parser("config", help="show the settings and where they come from; `config targets en,th` saves the default subtitle languages")
+    cf.add_argument("key", nargs="?", choices=["targets"], help="what to set (targets = the default subtitle languages)")
+    cf.add_argument("value", nargs="?", help="the new value, e.g. en,th")
+    cf.add_argument("--clear", action="store_true", help="forget the saved value (the environment or the built-in default applies again)")
+    cf.set_defaults(fn=cmd_config)
     pl = sub.add_parser("pull", help="download models before the first run: the ASR models and the default translators, or the names given")
     pl.add_argument("names", nargs="*", help="translator presets, Ollama tags, ASR model names, 'asr' or 'defaults' (default: defaults)")
     pl.add_argument("--all", action="store_true", help="every translator preset as well as the ASR models")

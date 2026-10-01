@@ -22,7 +22,9 @@
         <summary><span id="targets-summary">{% for code, name, native in langs if code in default_targets %}{{ name }}{% if not loop.last %}, {% endif %}{% endfor %}</span> <span class="caret">&#9662;</span></summary>
         <div class="menu">
           <div class="menu-tools"><button type="button" class="small secondary" id="targets-none">none</button>
-            <span class="muted">one .srt per ticked language — <code>&lt;video&gt;.&lt;code&gt;.srt</code></span></div>
+            <button type="button" class="small secondary" id="targets-default" title="save the ticked languages as the default for every job queued from here or the command line">make these the default</button>
+            <span class="muted" id="targets-default-note">default now: {{ default_targets|join(', ') }}</span>
+            <span class="muted">· one .srt per ticked language — <code>&lt;video&gt;.&lt;code&gt;.srt</code></span></div>
           <div class="menu-grid">
             {% for code, name, native in langs %}<label title="{{ code }}"><input type="checkbox" name="target_{{ code }}" value="1" data-name="{{ name }}" {% if code in default_targets %}checked{% endif %}> {{ name }}{% if native and native != name %} <span class="muted">{{ native }}</span>{% endif %}</label>
             {% endfor %}
