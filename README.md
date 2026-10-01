@@ -122,7 +122,7 @@ Presets in `mlsubgen/config.py`; `mlsubgen models` shows which are pulled.
 | `qwen3.8` | `qwen3.8:27b` (q4_K_M, 18 GB) | Japanese → English (default route) |
 | `gemma4` | `gemma4:31b-it-qat` (19 GB) | every other language pair (default route) |
 | `translategemma` | `translategemma:27b` (17 GB) | translation-only Gemma; fixed prompt |
-| `qwen3-30b` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | the fast MoE fallback (~3 B active) |
+| `qwen3-30b` | `qwen3:30b-a3b-instruct-2507-q4_K_M` (18 GB) | the fast MoE fallback (~3 B active) |
 
 `-t NAME` forces one preset for every pair; `--model TAG` any Ollama model; `--backend openai --url http://host:port
 --model NAME` any OpenAI-compatible server (llama-server, vLLM …). `mlsubgen bench VIDEO --clip 0:10:00-0:20:00`
