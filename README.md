@@ -28,15 +28,10 @@ each stretch is transcribed with that language forced, and each of 45 target lan
   in the target language is copied through, not translated.
 - **Subtitle typesetting** per language: line length by script, reading-speed ceilings (slower for CJK), minimum
   durations and gaps, cluster-safe line breaks for Thai, Lao, Khmer, Burmese and Devanagari.
-- **Speaker diarization, optional** (`--speakers auto`, or the Speakers option in the web form): who spoke when,
-  on the CPU, through sherpa-onnx's pipeline — pyannote's segmentation-3.0 as ONNX, a 3D-Speaker embedding model
-  and sherpa's clustering. The upstream segmentation-3.0 weights are MIT-licensed; mlsubgen uses the ONNX build
-  that sherpa-onnx distributes from GitHub Releases, so no Hugging Face account or token is needed and no
-  repository access conditions have to be accepted (`mlsubgen pull speakers` fetches both files and writes the
-  attribution notice beside them). A speaker change closes a cue, and the translator is told which lines share a
-  voice so each character's register stays consistent. The labels are evidence, not truth: a word that two voices
-  cover about equally stays unlabelled, a file where the evidence is too muddled is processed as if the option
-  were off, and the labels never appear in the subtitles.
+- **Optional speaker diarization** — sherpa-onnx finds the speaker turns locally on the CPU. Speaker changes
+  sharpen language detection and cue boundaries, and give the translator anonymous speaker continuity; uncertain
+  speaker evidence is left unknown rather than forced. `--speakers auto`, or `--speakers N` when you know the
+  count. See *Speakers* below.
 - **Embedded subtitles are used before the audio is**: a video that already carries full subtitles in a target
   language is left alone for that target, and any other full text track in one of the 45 languages — not forced,
   not signs-and-songs — becomes the transcript to translate from, the spoken language's track first. No ASR time
@@ -119,10 +114,10 @@ web UI shows the per-file outcome and the live log. `mlsubgen --now …` runs in
 ### The web UI
 
 A new-job form (folder picker confined to your media roots, tick boxes for the subtitle languages, the spoken
-language if you want to override the detector, translator, ASR mode, embedded-subtitle policy, context, glossary),
-a **Preview (dry run)** that lists exactly which files a job would touch, the queue with pause / resume / cancel /
-retry, a job page with per-file outcomes and the live log, and a page of skipped files that can be re-queued with
-the language forced.
+language if you want to override the detector, translator, ASR mode, speaker diarization, embedded-subtitle
+policy, context, glossary), a **Preview (dry run)** that lists exactly which files a job would touch, the queue
+with pause / resume / cancel / retry, a job page with per-file outcomes and the live log, and a page of skipped
+files that can be re-queued with the language forced.
 
 ### Pipeline
 
@@ -130,15 +125,51 @@ the language forced.
 |---|---|
 | embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR |
 | probe | `ffprobe` picks the audio track (tag, then title, then the default) — `mlsubgen tracks FILE` shows them, `--audio-track N` overrides |
-| audio | `ffmpeg` → 16 kHz mono wav (deleted after the file's ASR) |
-| language ID | per ~10 s of speech: whisper's probability + Qwen's decode + the script of the words; a second language needs consecutive confident windows |
-| chunks | ≤ 30 s, one language each, covering the whole timeline; only stretches at the noise floor are skipped |
+| audio | `ffmpeg` → 16 kHz mono wav, kept until the file's diarization and ASR are done, then deleted |
+| speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU, before anything listens to the words; see *Speakers* |
+| language ID | per ~10 s of speech — or per speaker turn when the turns are known: whisper's probability + Qwen's decode + the words' script and function words; switch points refined to the exact span; a short run of another language needs strong evidence |
+| chunks | ≤ 30 s, one language each (a language change always cuts), covering the whole timeline; only stretches at the noise floor are skipped |
 | ASR | both engines decode every chunk with its language forced; checkpointed after every chunk |
 | merge | the translator LLM reconciles the two transcripts where they differ (chunks that agree need no LLM) |
-| speakers | with `--speakers`: speaker turns from sherpa-onnx (CPU); each word takes the overlapping turn |
-| cues | sentence ends, pauses, length limits, hallucination filters (evidence-gated) |
-| translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, register rules, retry and per-line fallback |
+| word ↔ speaker | *with `--speakers`*: each aligned word takes the turn that covers it clearly, or stays unlabelled |
+| cues | sentence ends, pauses, speaker changes, length limits, hallucination filters (evidence-gated) |
+| translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, register rules, speaker continuity, retry and per-line fallback |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps → `<video>.<lang>.srt` |
+
+Without `--speakers` the two speaker rows simply do not run and everything else is unchanged.
+
+### Speakers
+
+`mlsubgen --speakers auto` (or the Speakers option in the web form) runs speaker diarization before the detector
+and uses one result twice:
+
+```
+segmentation-3.0 (ONNX)  →  3D-Speaker embeddings  →  sherpa clustering  →  speaker turns
+                                                                              ├─ before ASR: language-detection windows and chunk boundaries
+                                                                              └─ after ASR:  word attribution → cue boundaries → translator continuity
+```
+
+- **Models.** `mlsubgen pull speakers` downloads two ONNX files (46 MB) from sherpa-onnx's GitHub Releases:
+  pyannote's `segmentation-3.0` (MIT) and a 3D-Speaker ERes2Net embedding model (Apache-2.0), and writes a
+  `NOTICE.txt` with the attributions beside them. mlsubgen uses sherpa-onnx's ONNX distribution from GitHub, so
+  this feature does not require a Hugging Face account or token. The Models panel shows both files like the other
+  models. sherpa's clustering is not pyannote's full pipeline; mlsubgen does not claim to reproduce it.
+- **`auto` or `N`.** `auto` lets the clustering decide the speaker count (threshold in `config.py`); `--speakers N`
+  fixes it, which removes the hardest part of diarization when a cast size is known.
+- **Speaker-aware language detection.** Speech is cut at speaker changes so a detection window never holds two
+  voices, every detected speaker gets sampled, and a voice's language history is evidence for its *uncertain*
+  windows — never for its confident ones. So a character who switches language mid-scene is still followed, and
+  a bilingual voice is learnt as bilingual rather than locked to one language. That is a feature, not a limit.
+- **Cues and translation.** A speaker change closes a cue; the translator sees an anonymous tag per line (`[S2]`)
+  with the rule that tags mean only "same voice / different voice", nothing about who the speaker is, and never
+  appear in the output. A word that two voices cover about equally stays unlabelled.
+- **Fallback.** A file whose diarization fails the gate (one voice, or so many clusters that it is fragmentation,
+  or more ambiguous words than labelled ones) is processed exactly as without `--speakers`.
+- **Measuring it.** `mlsubgen bench VIDEO --speakers auto` against the same clip without it shows the effect on cue
+  boundaries and translation; `mlsubgen lidbench VIDEO --speakers auto` scores the detector against a film's forced
+  subtitle track. On the author's test films (Babel, Inglourious Basterds, Only God Forgives) the speaker-aware
+  detector raised recall and switch recall where speakers map cleanly to languages and was mixed on feature films
+  where the clustering fragments into many voices — which is why it is off by default.
 
 ### Translators
 
@@ -205,16 +236,10 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
 - NVIDIA only.
 - The `12gb` and `8gb` profiles are new and lightly tested: the ASR side is the same code with less resident at
   once, but the small translators have had far less use than the 27–31B ones. Reports welcome.
-- Speaker diarization is new and off by default. sherpa-onnx's clustering is not pyannote's tuned pipeline, and
-  several similar voices over a music bed is the hard case, so the labels are passed to the translator as hints
-  and never written out. `mlsubgen bench VIDEO --speakers auto` against the same clip without them shows what it
-  does for your material.
-- With `--speakers`, the language detector is speaker-aware (0.4.4): the diarization runs first, speech is cut
-  at speaker changes so a detection window never holds two voices, every voice gets sampled, and a voice's
-  language history is evidence for its uncertain windows — never for its confident ones, so a character who
-  switches language mid-scene is still followed, and a bilingual voice is learnt as bilingual rather than locked
-  to one language. `mlsubgen lidbench VIDEO --speakers auto` against the plain run measures it on a film with a
-  forced subtitle track.
+- Diarization can be unreliable with overlapping speech, similar voices and music-heavy material, and on a
+  feature film the clustering tends to split a cast into many more "voices" than there are. Speaker evidence is
+  therefore advisory and ignored where it is too thin, too muddled or too fragmented; the feature is off by
+  default until `bench` or `lidbench` shows it helps on your material.
 
 ## Support and provenance
 
@@ -227,5 +252,8 @@ one person, not a product.
 
 Apache-2.0 (see `LICENSE`). Built on [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) and
 Qwen3-ForcedAligner (Apache-2.0), [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (MIT),
-[Silero VAD](https://github.com/snakers4/silero-vad) (MIT) and [Ollama](https://ollama.com). The translator models
-carry their own licences (Qwen: Apache-2.0; Gemma: Google's Gemma terms).
+[Silero VAD](https://github.com/snakers4/silero-vad) (MIT), [Ollama](https://ollama.com), and for speakers
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) with pyannote's
+[segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) (MIT) and a
+[3D-Speaker](https://github.com/modelscope/3D-Speaker) embedding model (Apache-2.0). The translator models carry
+their own licences (Qwen: Apache-2.0; Gemma: Google's Gemma terms).
