@@ -1328,6 +1328,110 @@ def _hms(t: float) -> str:
     return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}"
 
 
+def _pick_bitmap_track(pr, index: int | None, lang: str | None):
+    tracks = [t for t in pr.subs if not t.is_text]
+    if index is not None:
+        tracks = [t for t in tracks if t.index == index]
+    elif lang:
+        from .subs import code_for_tag
+        tracks = [t for t in tracks if code_for_tag(t.language) == lang and not t.forced] or \
+                 [t for t in tracks if code_for_tag(t.language) == lang]
+    return tracks[0] if tracks else None
+
+
+def cmd_ocr(a: argparse.Namespace) -> int:
+    """`mlsubgen ocr VIDEO --track N` — a bitmap (PGS) subtitle track to .srt through OCR (0.4.8). Writes to the OCR
+    cache beside the work files unless --out says otherwise; never beside the video."""
+    from . import ocr
+    from .probe import describe_tracks, probe
+    from .subs import code_for_tag
+    video = Path(a.video).expanduser()
+    if not video.is_file():
+        _log(f"not found: {video}"); return 1
+    pr = probe(video)
+    t = _pick_bitmap_track(pr, a.track, a.lang)
+    if t is None:
+        _log("no bitmap subtitle track matched — pick one with --track N:"); _log(describe_tracks(pr)); return 1
+    lang = a.lang or code_for_tag(t.language) or "en"
+    ok, why = ocr.tesseract_available(lang)
+    if not ok:
+        _log(f"[ocr] {why}"); return 1
+    out = Path(a.out).expanduser() if a.out else ocr.cached_srt_for(video, t.index, a.engine)
+    t0 = time.time()
+    _log(f"[ocr] s:{t.index} {t.codec} lang={t.language} → {lang} ({why}) with {a.engine}")
+    cues = ocr.ocr_track(video, t.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
+    n = ocr.write_srt(cues, out)
+    _log(f"[ocr] {n} cues in {time.time() - t0:.0f}s → {out}")
+    if cues:
+        _log("[ocr] first lines: " + " | ".join(c.text.replace("\n", " / ") for c in cues[:3]))
+    return 0
+
+
+def cmd_ocrbench(a: argparse.Namespace) -> int:
+    """How good is the OCR? A film with BOTH a bitmap track and a text track in the same language is the free
+    ground truth: OCR the bitmap track, pair each OCR'd cue with the text cue it overlaps most, and score the
+    characters (chrF) plus how many cues matched. Prints the worst lines so the error kinds are visible."""
+    from . import ocr
+    from .bench import chrf
+    from .probe import describe_tracks, probe
+    from .srt import read_srt
+    from .subs import code_for_tag, extract_track
+    video = Path(a.video).expanduser()
+    if not video.is_file():
+        _log(f"not found: {video}"); return 1
+    pr = probe(video)
+    bm = _pick_bitmap_track(pr, a.track, a.lang)
+    if bm is None:
+        _log("no bitmap track matched"); _log(describe_tracks(pr)); return 1
+    lang = a.lang or code_for_tag(bm.language) or "en"
+    if a.reference:
+        ref = read_srt(Path(a.reference).expanduser()); where = Path(a.reference).name
+    else:
+        texts = [t for t in pr.subs if t.is_text and code_for_tag(t.language) == lang and not t.forced]
+        if a.reference_track is not None:
+            texts = [t for t in pr.subs if t.index == a.reference_track]
+        if not texts:
+            _log(f"no text track in {lang} to compare with — pass --reference FILE.srt or --reference-track N"); _log(describe_tracks(pr)); return 1
+        rt = texts[0]
+        tmp = config.TMP_DIR / f"{video.stem[:60]}.ocrref.srt"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        extract_track(video, rt.index, tmp, rt.codec)
+        ref = read_srt(tmp); where = f"s:{rt.index} {rt.codec}"
+    ok, why = ocr.tesseract_available(lang)
+    if not ok:
+        _log(f"[ocr] {why}"); return 1
+    t0 = time.time()
+    cues = ocr.ocr_track(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
+    if a.limit:
+        cues = cues[:a.limit]
+    elapsed = time.time() - t0
+    import re as _re
+    norm = lambda s: _re.sub(r"\s+", " ", _re.sub(r"</?i>|\{[^}]*\}", "", s)).strip().lower()
+    pairs = []
+    unmatched = 0
+    for c in cues:
+        best, best_ov = None, 0.0
+        for r in ref:
+            ov = min(c.end, r.end) - max(c.start, r.start)
+            if ov > best_ov:
+                best, best_ov = r, ov
+        if best is None or best_ov <= 0:
+            unmatched += 1; continue
+        pairs.append((c, best))
+    score = chrf([norm(c.text) for c, _ in pairs], [norm(r.text) for _, r in pairs]) if pairs else None
+    exact = sum(1 for c, r in pairs if norm(c.text) == norm(r.text))
+    print(f"\nocrbench  {video.name}")
+    print(f"  bitmap s:{bm.index} ({bm.language}) with {a.engine} vs text {where} · {len(cues)} OCR cues, {len(ref)} reference cues · {elapsed:.0f}s")
+    print(f"  matched {len(pairs)} ({unmatched} OCR cues overlap no reference cue)   exact {exact} ({100 * exact / max(1, len(pairs)):.0f}%)"
+          + (f"   chrF {score:.1f}" if score is not None else ""))
+    worst = sorted(pairs, key=lambda p: -abs(len(norm(p[0].text)) - len(norm(p[1].text))))[:a.show]
+    if worst:
+        print("  worst length mismatches (OCR | reference):")
+        for c, r in worst:
+            print(f"    {_hms(c.start)}  {norm(c.text)[:70]!r} | {norm(r.text)[:70]!r}")
+    return 0
+
+
 def cmd_config(a: argparse.Namespace) -> int:
     """`mlsubgen config` shows the settings that matter and where each comes from; `mlsubgen config targets en,th`
     saves the default subtitle languages (the web form's "make these the default" does the same); `--clear` forgets
@@ -1714,6 +1818,32 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert language_of_text(ja_srt) == "ja"
     assert language_of_text("1\n00:00:01,000 --> 00:00:02,000\nhello\n") is None, "too little text decides nothing"
     assert language_of_text("1\n00:00:01,000 --> 00:00:02,000\n" + "lorem ipsum dolor sit amet consectetur " * 10) is None, "Latin text with no function words decides nothing"
+    # PGS decoding (0.4.8): a hand-built stream — palette, a 4x2 object (run-length coded), a composition at 1.0 s,
+    # a clear at 2.5 s — decodes to one bitmap with the right pixels and interval; a replacing composition ends it too
+    from . import ocr as _ocr
+
+    def _seg(pts: float, kind: int, payload: bytes) -> bytes:
+        return b"PG" + int(pts * 90000).to_bytes(4, "big") + b"\0\0\0\0" + bytes([kind]) + len(payload).to_bytes(2, "big") + payload
+    pds = bytes([1, 0]) + bytes([1, 235, 128, 128, 255])                       # palette 1: index 1 = white, opaque
+    rle = bytes([0, 0x81, 1, 0, 0x02, 0, 0, 0, 0x84, 1, 0, 0])                 # row 1: 1 white, 2 zeros, (pad) ; row 2: 4 white
+    ods = (7).to_bytes(2, "big") + bytes([0, 0xC0]) + (len(rle) + 4).to_bytes(3, "big") + (4).to_bytes(2, "big") + (2).to_bytes(2, "big") + rle
+    pcs_on = (1920).to_bytes(2, "big") + (1080).to_bytes(2, "big") + bytes([0x10, 0, 1, 0x80, 0, 1, 1]) + (7).to_bytes(2, "big") + bytes([0, 0]) + (100).to_bytes(2, "big") + (900).to_bytes(2, "big")
+    pcs_off = (1920).to_bytes(2, "big") + (1080).to_bytes(2, "big") + bytes([0x10, 0, 2, 0x00, 0, 1, 0])
+    stream = _seg(1.0, 0x16, pcs_on) + _seg(1.0, 0x14, pds) + _seg(1.0, 0x15, ods) + _seg(1.0, 0x80, b"") + _seg(2.5, 0x16, pcs_off) + _seg(2.5, 0x80, b"")
+    bms = _ocr.decode_sup(stream)
+    assert len(bms) == 1 and (bms[0].start, bms[0].end, bms[0].width, bms[0].height) == (1.0, 2.5, 4, 2), bms
+    px = [bms[0].rgba[i * 4 + 3] for i in range(8)]                            # alpha per pixel
+    assert px == [255, 0, 0, 0, 255, 255, 255, 255], px
+    stream2 = _seg(1.0, 0x16, pcs_on) + _seg(1.0, 0x14, pds) + _seg(1.0, 0x15, ods) + _seg(1.0, 0x80, b"") + \
+        _seg(3.0, 0x16, pcs_on) + _seg(3.0, 0x14, pds) + _seg(3.0, 0x15, ods) + _seg(3.0, 0x80, b"") + _seg(4.0, 0x16, pcs_off) + _seg(4.0, 0x80, b"")
+    assert [(b.start, b.end) for b in _ocr.decode_sup(stream2)] == [(1.0, 3.0), (3.0, 4.0)], "a replacing composition ends the previous one"
+    assert _ocr.TESSERACT_LANGS["ja"] == "jpn" and _ocr.TESSERACT_LANGS["th"] == "tha"
+    try:
+        import PIL  # noqa: F401
+        png = _ocr.to_png(bms[0])
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    except ImportError:
+        pass                                                                   # pillow is a dependency of the OCR path only
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None
@@ -1787,6 +1917,24 @@ def main(argv: list[str] | None = None) -> int:
     lb.add_argument("--out-dir", default=str(config.BENCH_DIR))
     add_common(lb)
     lb.set_defaults(fn=cmd_lidbench)
+
+    oc = sub.add_parser("ocr", help="a bitmap (PGS) subtitle track to .srt through OCR (0.4.8); writes to the OCR cache")
+    oc.add_argument("video")
+    oc.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N (see `mlsubgen tracks`)")
+    oc.add_argument("--lang", default=None, help="the OCR language (default: the track's tag)")
+    oc.add_argument("--engine", default="tesseract", choices=["tesseract"])
+    oc.add_argument("--out", default=None, help="write the .srt here instead of the cache")
+    oc.set_defaults(fn=cmd_ocr)
+    ob = sub.add_parser("ocrbench", help="score the OCR of a bitmap track against a text track of the same film")
+    ob.add_argument("video")
+    ob.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N")
+    ob.add_argument("--lang", default=None)
+    ob.add_argument("--engine", default="tesseract", choices=["tesseract"])
+    ob.add_argument("--reference", default=None, help="a .srt to compare with (default: the film's text track in that language)")
+    ob.add_argument("--reference-track", type=int, default=None, metavar="N")
+    ob.add_argument("--limit", type=int, default=0, help="score only the first N OCR cues (0 = all)")
+    ob.add_argument("--show", type=int, default=10)
+    ob.set_defaults(fn=cmd_ocrbench)
 
     sc = sub.add_parser("scan", help="detect languages only — no ASR, nothing written beside the videos")
     sc.add_argument("paths", nargs="*", help="files or folders (default: the current folder)")

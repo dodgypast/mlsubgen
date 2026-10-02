@@ -11,6 +11,8 @@ faster-whisper==1.2.1
 # speaker diarization (--speakers): pyannote segmentation-3.0 as ONNX + a 3D-Speaker embedding model, on the CPU;
 # the models come from sherpa-onnx's GitHub releases via `mlsubgen pull speakers`
 sherpa-onnx==1.13.3
+# OCR of bitmap (PGS) subtitle tracks (0.4.8): the images; the engine is the `tesseract` binary + its language packs
+pillow==12.1.0
 # the web front end (mlsubgen web)
 fastapi==0.141.1
 uvicorn==0.52.4
