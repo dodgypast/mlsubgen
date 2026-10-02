@@ -1923,6 +1923,28 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.clean_ocr("...l knew...", "en") == "...I knew..." and _ocr.clean_ocr("l knew", "fr") == "l knew"
     assert _ocr.clean_ocr("the_name", "en") == "the_name", "an underscore inside a word stays"
     assert _ocr.clean_ocr("iIn Nazi-occupied France", "en") == "In Nazi-occupied France", "an italic I read twice"
+    # the OCR gate (0.5.0.4): subtitles pass; symbol salad, the wrong script, a repeated line and prose do not
+    _OC = _ocr.OcrCue
+    good_en = [_OC(i, i + 1, t) for i, t in enumerate(["What are you doing?", "I just think there's a problem.", "- Thanks. - You're welcome.",
+                                                        "Where were you last night?", "It's fine, really.", "Come on, let's go.",
+                                                        "He said no.", "Why not?", "Because I said so.", "Okay then.", "See you tomorrow.", "Bye."])]
+    assert _ocr.assess(good_en, "en")[0], _ocr.assess(good_en, "en")
+    good_th = [_OC(i, i + 1, t) for i, t in enumerate(["หยุดนะ หยุด", "แกรรี่ นี่มันอะไรกัน", "หมายศาลสำหรับยึดทรัพย์สิน", "ไม่ได้", "ไปกันเถอะ",
+                                                        "ฉันคิดถึงไอ้บ้านั่น", "เขาพูดถูก", "ทำไมล่ะ", "ก็เพราะฉันบอกไง", "โอเค", "เจอกันพรุ่งนี้", "บาย"])]
+    assert _ocr.assess(good_th, "th")[0], _ocr.assess(good_th, "th")
+    salad = [_OC(i, i + 1, t) for i, t in enumerate(["๓% = = %7% ฆ ฉัน", "๓ม = = ขช= 1 «| ร ๐", "%% == ๐ ๐ =“ ฉัน", "= = %7% ฆ", "๓% = =", "«| ร ๐ ๐ =",
+                                                      "%7% ฆ ==", "= = ๓ม", "๐ =“ ==", "«| %7%", "== ๓% =", "%% =="])]
+    ok, m, why = _ocr.assess(salad, "th")
+    assert not ok and "symbols" in why, (m, why)
+    wrong = [_OC(i, i + 1, t) for i, t in enumerate(["这是什么", "我不知道", "走吧", "等一下", "为什么", "因为我说了", "好的", "明天见", "再见", "不行", "快点", "来吧"])]
+    ok, m, why = _ocr.assess(wrong, "th")
+    assert not ok and "script" in why, (m, why)
+    rep = [_OC(i, i + 1, "Loading…" if i % 2 else f"line {i} here now") for i in range(12)]
+    ok, m, why = _ocr.assess(rep, "en")
+    assert not ok and "repeated" in why, (m, why)
+    prose = good_en[:11] + [_OC(20, 21, "The text says: hello")]
+    ok, m, why = _ocr.assess(prose, "en")
+    assert not ok and "describe" in why, (m, why)
     assert _ocr.clean_ocr("ท\u0e4d\u0e32ให้", "th") == "ทำให้", "Thai sara am as one character"
     assert _ocr.clean_ocr("什么cdots那是我表哥", "zh") == "什么…那是我表哥" and _ocr.clean_ocr(r"wait\ldots", "en") == "wait…"
     assert "th" in _ocr.VLM_SCRIPTS and "en" not in _ocr.VLM_SCRIPTS and "el" not in _ocr.VLM_SCRIPTS

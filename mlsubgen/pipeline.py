@@ -104,6 +104,11 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         if len(got) < MIN_CUES:
             _log(f"[subs] bitmap {config.LANG_NAMES.get(t, t)} track s:{track.index} OCR'd to only {len(got)} cues — not used")
             continue
+        usable, measured, why = ocr.assess([ocr.OcrCue(c.start, c.end, c.text) for c in got], t)
+        data.setdefault("ocr_gate", {})[f"s:{track.index}"] = {"language": t, "usable": usable, "why": why, **measured}
+        if not usable:
+            _log(f"[subs] bitmap {config.LANG_NAMES.get(t, t)} track s:{track.index}: OCR rejected by the gate ({why}) — not used")
+            continue
         out = srt_path_for(job.video, t)
         write_srt(out, got)
         satisfied.append(t)
@@ -129,6 +134,13 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         origin = {"sidecar": str(src), "language": lang}
     elif not src.is_text:
         path, n, cached = ocr.ocr_track_cached(job.video, src.index, lang, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
+        raw = [ocr.OcrCue(c.start, c.end, c.text) for c in read_srt(path) if c.text.strip()]
+        usable, measured, why = ocr.assess(raw, lang)
+        data.setdefault("ocr_gate", {})[f"s:{src.index}"] = {"language": lang, "usable": usable, "why": why, **measured}
+        if not usable:
+            _log(f"[subs] bitmap {name} track s:{src.index}: OCR rejected by the gate ({why}) — using ASR")
+            work.save(job.work_file, data)
+            return satisfied, None
         cues = cues_from_track(path, lang, sdh=is_sdh(src))
         key = f"ocr|s:{src.index}|{src.codec}|v{config.OCR_VERSION}|{lang}"
         where = f"bitmap s:{src.index} {src.codec}{', ' + src.title if src.title else ''}, OCR'd with {ocr.engine_for(lang)}{' (cached)' if cached else ''}"

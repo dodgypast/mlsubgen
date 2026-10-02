@@ -296,6 +296,13 @@ OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1
 OCR_VERSION = 2                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
                                # (1 → 2: underscore-for-dash and bare-l-for-I rules, from the full-track measurement)
 OCR_PREP = os.environ.get("MLSUBGEN_OCR_PREP", "binary")   # how the subtitle image is prepared for tesseract: binary | fill | gray | fill3x
+# the OCR gate (0.5.0.4): an OCR'd track is used only when it reads like subtitles in the expected language —
+# thresholds set from the measured tracks (see ocr.assess)
+OCR_GATE_SCRIPT = 0.7          # at least this share of cues in the language's script
+OCR_GATE_SYMBOLS = 0.12        # at most this share of characters that are symbols rather than letters, digits, punctuation
+OCR_GATE_REPLACEMENT = 0.002   # at most this share of replacement characters (U+FFFD)
+OCR_GATE_REPEAT = 0.2          # no single line on more than this share of cues
+OCR_GATE_PROSE = 0.02          # at most this share of cues that describe the image ("The text says…")
 # OCR_VLM_MODEL (the vision model for --engine vlm) is set per hardware profile by apply_profile(), above
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────

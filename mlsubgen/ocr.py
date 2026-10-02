@@ -353,9 +353,11 @@ def clean_ocr(text: str, lang: str) -> str:
     return "\n".join(l for l in lines if l)
 
 
-VLM_PROMPT = ("This image is one subtitle from a film, in {language}. Transcribe its text exactly as written: every "
-              "character, line breaks as line breaks, nothing added, nothing explained, no quotation marks around it. "
-              "If the image holds no text, answer with an empty line.{extra}")
+VLM_PROMPT = ("This image is one subtitle from a film, in {language}. Return only the visible subtitle text, exactly as "
+              "written: every character, line breaks as line breaks. Do not correct grammar or spelling, do not "
+              "paraphrase, do not infer missing words, do not translate, do not add punctuation that is not visible, "
+              "do not explain or describe, no quotation marks around it. If the image holds no text, answer with an "
+              "empty line.{extra}")
 VLM_EXTRA = {"ja": " Ignore any small furigana (ruby readings) printed above the kanji: transcribe the main text only.",
              "zh": " Keep the characters in the script shown (simplified or traditional); do not convert them.",
              "yue": " Keep the characters in the script shown (simplified or traditional); do not convert them."}
@@ -494,6 +496,55 @@ def ocr_track_images(bitmaps: list[Bitmap], lang: str, engine: str = "tesseract"
                 progress(done, len(bitmaps))
         vlm_unload()                                                  # the card is needed next by the ASR engines
     return [OcrCue(bm.start, bm.end, t) for bm, t in zip(bitmaps, texts) if t]
+
+
+# ── the OCR gate (0.5.0.4) ───────────────────────────────────────────────────────────────────────────────────
+# An OCR'd track is used only when its text looks like subtitles in the expected language. The two engines fail
+# differently — tesseract produces symbol salad that still contains letters of the right script, a vision model
+# produces plausible text that may not be on the screen, or prose about the image — and both leave marks that a
+# transcript does not: symbols where letters should be, cues in another script, one line repeated across many
+# cues, replacement characters, sentences that describe the image. A track that fails is left alone and the
+# audio is transcribed, as before 0.4.8.
+_SCRIPT_FOR = {"ja": {"ja", "han"}, "zh": {"han"}, "yue": {"han"}, "ko": {"ko"}, "th": {"th"}, "el": {"greek"},
+               "ru": {"cyrillic"}, "uk": {"cyrillic"}, "bg": {"cyrillic"}}
+_PROSE = _re.compile(r"^\s*(?:the (?:text|image|subtitle|caption)|this (?:image|subtitle)|here is|here's|i can see|it (?:says|reads)|"
+                     r"the words|there is no text|no text)", _re.I)
+_COMMON_PUNCT = set(" \t\n.,;:!?'\"-–—…()[]「」『』、。！？・“”‘’«»¿¡/&+♪" + "\u3000")      # = % | # etc. are symbol salad
+
+
+def assess(cues: list[OcrCue], lang: str) -> tuple[bool, dict, str]:
+    """(usable, measurements, reason). Thresholds in config.OCR_GATE_*; the measurements are kept with the
+    track's record so a rejection can be read later."""
+    from collections import Counter
+    from .lid import script_of
+    texts = [c.text for c in cues if c.text.strip()]
+    n = len(texts)
+    if n < 10:
+        return False, {"cues": n}, f"only {n} cues"
+    expected = _SCRIPT_FOR.get(lang, {"latin"})
+    scripts = [script_of(t) for t in texts]
+    judged = [s for s in scripts if s]                       # a cue of only digits or symbols has no script
+    script_match = sum(1 for s in judged if s in expected) / max(1, len(judged))
+    chars = "".join(texts)
+    symbols = sum(1 for ch in chars if not (ch.isalnum() or ch.isspace() or ch in _COMMON_PUNCT or
+                                            0x300 <= ord(ch) <= 0x36F or 0xE31 <= ord(ch) <= 0xE4E or 0x3099 <= ord(ch) <= 0x309A))
+    symbol_share = symbols / max(1, len(chars))
+    replacement = chars.count("\ufffd") / max(1, len(chars))
+    repeat = max(Counter(texts).values()) / n
+    prose = sum(1 for t in texts if _PROSE.match(t)) / n
+    m = {"cues": n, "script_match": round(script_match, 3), "symbol_share": round(symbol_share, 3),
+         "replacement": round(replacement, 4), "repeat": round(repeat, 3), "prose": round(prose, 3)}
+    if script_match < config.OCR_GATE_SCRIPT:
+        return False, m, f"{100 * (1 - script_match):.0f}% of cues are not in the {config.LANG_NAMES.get(lang, lang)} script"
+    if symbol_share > config.OCR_GATE_SYMBOLS:
+        return False, m, f"{100 * symbol_share:.0f}% of characters are symbols, not letters"
+    if replacement > config.OCR_GATE_REPLACEMENT:
+        return False, m, "replacement characters in the text"
+    if repeat > config.OCR_GATE_REPEAT:
+        return False, m, f"one line repeated across {100 * repeat:.0f}% of cues"
+    if prose > config.OCR_GATE_PROSE:
+        return False, m, f"{100 * prose:.0f}% of cues describe the image instead of transcribing it"
+    return True, m, "ok"
 
 
 def write_srt(cues: list[OcrCue], out: Path) -> int:
