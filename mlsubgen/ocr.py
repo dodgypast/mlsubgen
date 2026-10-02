@@ -264,11 +264,67 @@ def tesseract_available(lang: str) -> tuple[bool, str]:
     return True, pack
 
 
-def ocr_tesseract(png: bytes, pack: str) -> str:
-    res = subprocess.run(["tesseract", "stdin", "stdout", "-l", pack, "--psm", "6"], input=png, capture_output=True, timeout=60)
+def ocr_tesseract(png: bytes, pack: str, psm: int = 6) -> str:
+    res = subprocess.run(["tesseract", "stdin", "stdout", "-l", pack, "--psm", str(psm)], input=png, capture_output=True, timeout=60)
     text = res.stdout.decode("utf-8", "replace")
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     return "\n".join(lines)
+
+
+# Scripts that stack marks above and below the baseline. tesseract's block mode (psm 6) saw a Thai subtitle's row
+# of tone marks and upper vowels as a text line of its own and read it as garbage, then read the base line without
+# its marks (2026-10-02: "๓% = = %7%" before "ฉันคิดถึงไอ้บ้านัน"). For these, the subtitle is cut into its text
+# lines by the ink profile — a line keeps the marks near it — and each line is read alone (psm 7) at 4×.
+STACKED_SCRIPTS = {"th", "lo", "km", "my", "hi", "bn", "ta", "vi", "ar", "fa", "he"}
+
+
+def split_text_lines(gray, min_gap_ratio: float = 0.45):
+    """Cut a prepared (dark-on-light) image into its text lines. Rows with ink form runs; runs closer than
+    `min_gap_ratio` × the tallest run's height are the same line (marks and their base); larger gaps separate
+    lines. Returns a list of PIL images, top to bottom."""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(gray.convert("L"))
+    ink = (a < 160).sum(axis=1) > 0
+    runs: list[list[int]] = []
+    for r, on in enumerate(ink):
+        if on:
+            if runs and runs[-1][1] == r - 1:
+                runs[-1][1] = r
+            else:
+                runs.append([r, r])
+    if not runs:
+        return [gray]
+    tallest = max(e - s + 1 for s, e in runs)
+    merged: list[list[int]] = [runs[0]]
+    for s, e in runs[1:]:
+        if s - merged[-1][1] <= tallest * min_gap_ratio:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    pad = max(6, tallest // 4)
+    out = []
+    for s, e in merged:
+        if e - s + 1 < 3:
+            continue
+        box = (0, max(0, s - pad), gray.width, min(gray.height, e + pad + 1))
+        out.append(gray.crop(box))
+    return out or [gray]
+
+
+def ocr_tesseract_lines(bm: "Bitmap", pack: str, lang: str, prep: str | None = None) -> str:
+    """The stacked-script path: prepare at 4×, split into text lines, read each alone."""
+    from PIL import Image
+    png = to_png(bm, scale=4, mode=prep or ("gray" if config.OCR_PREP == "binary" else config.OCR_PREP))
+    gray = Image.open(io.BytesIO(png)).convert("L")
+    texts = []
+    for line in split_text_lines(gray):
+        buf = io.BytesIO()
+        line.save(buf, format="PNG")
+        t = ocr_tesseract(buf.getvalue(), pack, psm=7).replace("\n", " ").strip()
+        if t:
+            texts.append(t)
+    return "\n".join(texts)
 
 
 import re as _re
@@ -309,8 +365,10 @@ def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = N
     import urllib.request
     model = model or config.OCR_VLM_MODEL
     url = (url or config.LLM_URL).rstrip("/") + "/api/generate"
+    # think: false — Gemma 4 otherwise spends its tokens reasoning and returns an empty response (2026-10-02: 138 of
+    # 150 Thai images came back empty at eight seconds each; the translator presets switch thinking off the same way)
     body = {"model": model, "prompt": VLM_PROMPT.format(language=config.LANG_NAMES.get(lang, lang)),
-            "images": [base64.b64encode(png).decode("ascii")], "stream": False,
+            "images": [base64.b64encode(png).decode("ascii")], "stream": False, "think": False,
             "options": {"temperature": 0, "num_predict": 200}, "keep_alive": "10m"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=120) as resp:
@@ -373,8 +431,12 @@ def ocr_track_images(bitmaps: list[Bitmap], lang: str, engine: str = "tesseract"
     if engine == "tesseract":
         pack = why
         workers = workers or config.OCR_WORKERS
+        if lang in STACKED_SCRIPTS:
+            read = lambda bm: ocr_tesseract_lines(bm, pack, lang, prep)          # noqa: E731
+        else:
+            read = lambda bm: ocr_tesseract(to_png(bm, mode=prep), pack)        # noqa: E731
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for i, text in enumerate(pool.map(lambda bm: ocr_tesseract(to_png(bm, mode=prep), pack), bitmaps)):
+            for i, text in enumerate(pool.map(read, bitmaps)):
                 texts[i] = clean_ocr(text, lang)
                 done += 1
                 if progress and done % 100 == 0:

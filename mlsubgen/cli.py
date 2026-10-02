@@ -1890,9 +1890,20 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.VLM_PROMPT.format(language="Thai").startswith("This image is one subtitle")
     try:
         import PIL  # noqa: F401
+        from PIL import Image as _Img
         for m in _ocr.PREP_MODES:
             assert _ocr.to_png(bms[0], mode=m)[:8] == b"\x89PNG\r\n\x1a\n", m
         assert _ocr.vlm_png(bms[0])[:8] == b"\x89PNG\r\n\x1a\n"
+        # text-line splitting for stacked scripts: two lines of ink with a wide gap → two images; a thin row of
+        # "marks" just above a line stays with that line
+        im = _Img.new("L", (200, 120), 255)
+        px = im.load()
+        for x in range(20, 180):
+            for y in list(range(20, 24)) + list(range(30, 50)) + list(range(80, 100)):   # marks 20–23, line 30–49, line 80–99
+                px[x, y] = 0
+        parts = _ocr.split_text_lines(im)
+        assert len(parts) == 2 and parts[0].height > 30 and parts[1].height > 20, [(p.width, p.height) for p in parts]
+        assert "th" in _ocr.STACKED_SCRIPTS and "en" not in _ocr.STACKED_SCRIPTS
     except ImportError:
         pass
     try:
