@@ -1869,6 +1869,10 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.clean_ocr("l'm sure l'll go.", "en") == "I'm sure I'll go." and _ocr.clean_ocr("l'homme", "fr") == "l'homme"
     assert _ocr.clean_ocr("a well-known man\n-Yes.", "en") == "a well-known man\n- Yes.", "hyphenated words keep their hyphen"
     assert _ocr.clean_ocr("Tom | Jerry", "en") == "Tom | Jerry", "a pipe between words stays"
+    assert _ocr.clean_ocr("_Emily! _Emily!", "en") == "- Emily! - Emily!", "an underscore read for a dialogue dash"
+    assert _ocr.clean_ocr("...l knew...", "en") == "...I knew..." and _ocr.clean_ocr("l knew", "fr") == "l knew"
+    assert _ocr.clean_ocr("the_name", "en") == "the_name", "an underscore inside a word stays"
+    assert _ocr.clean_ocr("iIn Nazi-occupied France", "en") == "In Nazi-occupied France", "an italic I read twice"
     try:
         import PIL  # noqa: F401
         png = _ocr.to_png(bms[0])

@@ -86,7 +86,10 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
     pr = probe(job.video, job.audio_track)
     spoken = code_for_tag(pr.chosen.language) if pr.chosen else None     # the audio tag: prefer a track in that language
     use_ocr = (job.ocr or "auto") != "off"
-    satisfied, source = plan_sources(job.video, pr.subs, targets, mode, spoken, ocr=use_ocr)
+    # text tracks and sidecars first; bitmap targets next; only then a bitmap SOURCE, and only for what is still
+    # missing (2026-10-02: the French track of a film was OCR'd as a transcript for an English target that the
+    # English bitmap track had already satisfied)
+    satisfied, source = plan_sources(job.video, pr.subs, targets, mode, spoken, ocr=False)
     for t in satisfied:
         track = pick(pr.subs, t)
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are embedded (s:{track.index} {track.codec}"
@@ -105,12 +108,15 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         satisfied.append(t)
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are a bitmap track (s:{track.index} {track.codec}"
              f"{', ' + track.title if track.title else ''}) — OCR'd{' (cached)' if cached else ''} into {out.name}: {len(got)} cues")
+    remaining = [t for t in targets if t not in satisfied]
+    if source is None and remaining and use_ocr:
+        _, source = plan_sources(job.video, pr.subs, remaining, mode, spoken, ocr=True)      # a bitmap source, if any
     if source is None:
         bitmap = [t for t in pr.subs if not t.is_text]
-        if bitmap and len(satisfied) < len(targets):
+        if bitmap and remaining:
             langs = sorted({code_for_tag(t.language) or t.language for t in bitmap})
             _log(f"[subs] bitmap subtitle track(s) in {', '.join(langs)} — "
-                 + ("OCR is off (--ocr off)" if not use_ocr else "no OCR language pack for them here") + "; using ASR")
+                 + ("OCR is off (--ocr off)" if not use_ocr else "none usable as a transcript here (language pack?)") + "; using ASR")
         return satisfied, None
     src, lang = source
     name = config.LANG_NAMES.get(lang, lang)

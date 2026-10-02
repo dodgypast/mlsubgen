@@ -249,10 +249,11 @@ def ocr_tesseract(png: bytes, pack: str) -> str:
 
 
 import re as _re
-_DASH_START = _re.compile(r"(?m)^-(?=\S)")
-_DASH_MID = _re.compile(r"(?<=\s)-(?=[^\s\-])")
+_DASH_START = _re.compile(r"(?m)^[-_](?=\S)")                    # a tight dialogue dash, or one read as an underscore
+_DASH_MID = _re.compile(r"(?<=\s)[-_](?=[^\s\-_])")
 _PIPE_I = _re.compile(r"(?<![\w|])\|(?=['’]|\s+[a-z]|$)")      # "| hate", "|'m", a trailing "|" — not "Tom | Jerry"
-_L_I = _re.compile(r"(?<![\w'])l(?=['’](?:m|ll|ve|d)\b)")
+_L_I = _re.compile(r"(?<![\w'])l(?=['’](?:m|ll|ve|d)\b|\s+[a-z])")   # l'm, l'll …, and a bare "l knew": never an English word
+_ITALIC_I = _re.compile(r"\biI(?=[a-z])")                        # an italic capital I read twice: "iIn Nazi-occupied France"
 
 
 def clean_ocr(text: str, lang: str) -> str:
@@ -262,6 +263,7 @@ def clean_ocr(text: str, lang: str) -> str:
     text = _DASH_START.sub("- ", text)
     text = _DASH_MID.sub("- ", text)
     text = _PIPE_I.sub("I", text)
+    text = _ITALIC_I.sub("I", text)
     if lang == "en":
         text = _L_I.sub("I", text)
     lines = [_re.sub(r"[ \t]+", " ", l).strip() for l in text.splitlines()]

@@ -278,7 +278,8 @@ SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the 
 
 # ── OCR of bitmap subtitle tracks (0.4.8) ────────────────────────────────────────────────────────────────────
 OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1,800-cue track is ~4 min on four cores)
-OCR_VERSION = 1                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
+OCR_VERSION = 2                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
+                               # (1 → 2: underscore-for-dash and bare-l-for-I rules, from the full-track measurement)
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
 VAD_THRESHOLD = 0.5
