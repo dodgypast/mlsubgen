@@ -66,6 +66,26 @@ def pick(subs: list[SubTrack], lang: str) -> SubTrack | None:
     return None
 
 
+def pick_bitmap(subs: list[SubTrack], lang: str) -> SubTrack | None:
+    """The first usable bitmap (PGS/VobSub) track in `lang` — the same rules as `pick`, for the tracks OCR can
+    read (0.4.8). SDH tracks (a title saying so) come after plain ones."""
+    tags = LANG_TAGS.get(lang, {lang})
+    words = TITLE_WORDS.get(lang, ())
+    found = [t for t in subs if not t.is_text and not t.forced and not PARTIAL_RE.search(t.title)
+             and (t.language in tags or any(w in t.title.lower() for w in words))]
+    found.sort(key=lambda t: 1 if re.search(r"sdh|hearing|cc\b", t.title, re.I) else 0)
+    return found[0] if found else None
+
+
+def ocr_ready(lang: str) -> bool:
+    """Can a bitmap track in `lang` be read here? (the OCR engine and its language pack)"""
+    try:
+        from .ocr import tesseract_available
+        return tesseract_available(lang)[0]
+    except Exception:
+        return False
+
+
 _BRACES = re.compile(r"\{[^}]*\}")                                  # ASS override tags and {comments} — never rendered
 _SKIP_STYLE = re.compile(r"romaji|roman|kanji|karaoke|\bkara\b|sign|title|logo|credit|staff|typeset|note|lyric", re.I)
 _TOP_OVERRIDE = re.compile(r"\\an[4-9]\b|\\pos\(|\\move\(")          # positioned, middle or top: signs, titles, karaoke
@@ -221,10 +241,12 @@ def plan_embedded(subs: list[SubTrack], targets: list[str], mode: str,
 
 
 def plan_sources(video: Path, subs: list[SubTrack], targets: list[str], mode: str,
-                 spoken: str | None = None) -> tuple[list[str], tuple[object, str] | None]:
+                 spoken: str | None = None, ocr: bool = True) -> tuple[list[str], tuple[object, str] | None]:
     """plan_embedded, then sidecar files: a <video>.<lang>.srt beside the video in a source language (ours from an
     earlier run, or anyone's) is a timed transcript too — the missing targets are translated from it instead of
-    transcribing the audio again. The source is (SubTrack, lang) or (Path, lang); mode ignore = audio only."""
+    transcribing the audio again. Then (0.4.8, `ocr`) a bitmap track in a source language that the OCR engine can
+    read: human subtitles with OCR noise still beat a transcription. The source is (SubTrack, lang) — a bitmap
+    SubTrack means "OCR it" — or (Path, lang); mode ignore = audio only."""
     satisfied, source = plan_embedded(subs, targets, mode, spoken)
     if source is not None or mode == "ignore":
         return satisfied, source
@@ -237,7 +259,29 @@ def plan_sources(video: Path, subs: list[SubTrack], targets: list[str], mode: st
         side = video.with_name(f"{video.stem}.{lang}.srt")
         if side.is_file():
             return satisfied, (side, lang)
+    if ocr:
+        for lang in source_order(spoken):
+            if lang in remaining:
+                continue
+            t = pick_bitmap(subs, lang)
+            if t is not None and ocr_ready(lang):
+                return satisfied, (t, lang)
     return satisfied, None
+
+
+def bitmap_targets(subs: list[SubTrack], targets: list[str], satisfied: list[str], ocr: bool = True) -> dict[str, SubTrack]:
+    """Targets that have no text track but a bitmap track the OCR engine can read (0.4.8): those are OCR'd straight
+    into the target's .srt — the real subtitles, no translation."""
+    if not ocr:
+        return {}
+    out: dict[str, SubTrack] = {}
+    for t in targets:
+        if t in satisfied or pick(subs, t) is not None:
+            continue
+        track = pick_bitmap(subs, t)
+        if track is not None and ocr_ready(t):
+            out[t] = track
+    return out
 
 
 def clean_ja_line(line: str) -> str:

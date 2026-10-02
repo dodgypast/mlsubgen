@@ -10,14 +10,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, lid, merge, work
+from . import config, lid, merge, ocr, work
 from .asr import Engines, Word, engine_for, words_from_dicts, words_to_dicts
 from .audio import extract_wav, load_wav
 from .clean import filter_cues
 from .probe import ProbeResult, describe_tracks, probe
 from .segment import Cue, build_cues, normalise_timing
-from .srt import typeset, write_srt
-from .subs import MIN_CUES, code_for_tag, cues_from_track, extract_track, pick, plan_sources
+from .srt import read_srt, typeset, write_srt
+from .subs import MIN_CUES, bitmap_targets, code_for_tag, cues_from_track, extract_track, pick, plan_sources
 from .translate import ClientPool, translate_cues
 from .vad import Span, speech_spans
 
@@ -41,6 +41,7 @@ class Job:
     source: str | None = None        # --source LANG: skip the detector, every span is this language
     speakers: str = "off"            # --speakers off | auto | N (0.4.0): diarize, split cues at speaker changes, hint the translator
     speaker_threshold: float | None = None
+    ocr: str = "auto"                # --ocr auto | off (0.4.8): bitmap subtitle tracks read through OCR as sources / targets
 
     @property
     def work_file(self) -> Path:
@@ -84,15 +85,32 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         return [], None
     pr = probe(job.video, job.audio_track)
     spoken = code_for_tag(pr.chosen.language) if pr.chosen else None     # the audio tag: prefer a track in that language
-    satisfied, source = plan_sources(job.video, pr.subs, targets, mode, spoken)
+    use_ocr = (job.ocr or "auto") != "off"
+    satisfied, source = plan_sources(job.video, pr.subs, targets, mode, spoken, ocr=use_ocr)
     for t in satisfied:
         track = pick(pr.subs, t)
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are embedded (s:{track.index} {track.codec}"
              f"{', ' + track.title if track.title else ''}) — no .{t}.srt written")
+    # a bitmap track in a target language (0.4.8): OCR it straight into that target's .srt — the real subtitles
+    for t, track in bitmap_targets(pr.subs, targets, satisfied, ocr=use_ocr).items():
+        if mode != "auto":
+            continue
+        path, n, cached = ocr.ocr_track_cached(job.video, track.index, t, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
+        got = [c for c in read_srt(path) if c.end > c.start and c.text.strip()]
+        if len(got) < MIN_CUES:
+            _log(f"[subs] bitmap {config.LANG_NAMES.get(t, t)} track s:{track.index} OCR'd to only {len(got)} cues — not used")
+            continue
+        out = srt_path_for(job.video, t)
+        write_srt(out, got)
+        satisfied.append(t)
+        _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are a bitmap track (s:{track.index} {track.codec}"
+             f"{', ' + track.title if track.title else ''}) — OCR'd{' (cached)' if cached else ''} into {out.name}: {len(got)} cues")
     if source is None:
         bitmap = [t for t in pr.subs if not t.is_text]
         if bitmap and len(satisfied) < len(targets):
-            _log(f"[subs] bitmap subtitle track(s) present ({', '.join(t.codec for t in bitmap)}) — need OCR, ignored; using ASR")
+            langs = sorted({code_for_tag(t.language) or t.language for t in bitmap})
+            _log(f"[subs] bitmap subtitle track(s) in {', '.join(langs)} — "
+                 + ("OCR is off (--ocr off)" if not use_ocr else "no OCR language pack for them here") + "; using ASR")
         return satisfied, None
     src, lang = source
     name = config.LANG_NAMES.get(lang, lang)
@@ -101,6 +119,12 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         key = f"sidecar|{src.name}|{lang}"
         where = f"{src.name} beside the video"
         origin = {"sidecar": str(src), "language": lang}
+    elif not src.is_text:
+        path, n, cached = ocr.ocr_track_cached(job.video, src.index, lang, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
+        cues = cues_from_track(path, lang)
+        key = f"ocr|s:{src.index}|{src.codec}|v{config.OCR_VERSION}|{lang}"
+        where = f"bitmap s:{src.index} {src.codec}{', ' + src.title if src.title else ''}, OCR'd{' (cached)' if cached else ''}"
+        origin = {"ocr_track": src.index, "codec": src.codec, "language": lang, "raw_cues": n, "ocr_version": config.OCR_VERSION}
     else:
         tmp = job.tmp_dir / (job.work_file.stem + f".{lang}.srt")
         n = extract_track(job.video, src.index, tmp, src.codec)

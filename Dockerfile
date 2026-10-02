@@ -6,7 +6,13 @@
 # next job with no rebuild.
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_ROOT_USER_ACTION=ignore
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# ffmpeg, and tesseract with language packs for OCR of bitmap (PGS) subtitle tracks (0.4.8) — the packs for the
+# languages the author's library needs most; add more with `apt-get install tesseract-ocr-<lang>` in a derived image
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr \
+      tesseract-ocr-eng tesseract-ocr-jpn tesseract-ocr-tha tesseract-ocr-kor tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
+      tesseract-ocr-deu tesseract-ocr-fra tesseract-ocr-spa tesseract-ocr-ita tesseract-ocr-por tesseract-ocr-nld \
+      tesseract-ocr-rus tesseract-ocr-pol tesseract-ocr-tur tesseract-ocr-ara tesseract-ocr-vie tesseract-ocr-ind \
+    && rm -rf /var/lib/apt/lists/*
 # CUDA 12.8 wheels (any reasonably current NVIDIA driver is fine); the versions the project was validated with
 RUN pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 COPY requirements.txt /tmp/requirements.txt

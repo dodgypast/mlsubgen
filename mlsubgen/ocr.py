@@ -248,24 +248,47 @@ def ocr_tesseract(png: bytes, pack: str) -> str:
     return "\n".join(lines)
 
 
-def ocr_track(video: Path, s_index: int, lang: str, engine: str = "tesseract", progress=None) -> list[OcrCue]:
-    """A bitmap track → cues. `lang` picks the OCR language pack; `progress(done, total)` is called as it goes."""
-    bitmaps = decode_sup(extract_sup(video, s_index))
+import re as _re
+_DASH_START = _re.compile(r"(?m)^-(?=\S)")
+_DASH_MID = _re.compile(r"(?<=\s)-(?=[^\s\-])")
+_PIPE_I = _re.compile(r"(?<![\w|])\|(?=['’]|\s+[a-z]|$)")      # "| hate", "|'m", a trailing "|" — not "Tom | Jerry"
+_L_I = _re.compile(r"(?<![\w'])l(?=['’](?:m|ll|ve|d)\b)")
+
+
+def clean_ocr(text: str, lang: str) -> str:
+    """The systematic habits of OCR'd subtitles, measured on a Blu-ray against its own SRT (2026-10-02): dialogue
+    dashes written tight (`-thanks.`) where subtitlers space them (`- thanks.`), and tesseract reading a capital I
+    as a pipe (`| hate you`). English only for the l'm/l'll kind — French has l'homme."""
+    text = _DASH_START.sub("- ", text)
+    text = _DASH_MID.sub("- ", text)
+    text = _PIPE_I.sub("I", text)
+    if lang == "en":
+        text = _L_I.sub("I", text)
+    lines = [_re.sub(r"[ \t]+", " ", l).strip() for l in text.splitlines()]
+    return "\n".join(l for l in lines if l)
+
+
+def ocr_track(video: Path, s_index: int, lang: str, engine: str = "tesseract", progress=None,
+              workers: int | None = None) -> list[OcrCue]:
+    """A bitmap track → cues. `lang` picks the OCR language pack; `progress(done, total)` is called as it goes.
+    tesseract is one process per image, so several run at once (`workers`, default OCR_WORKERS)."""
+    from concurrent.futures import ThreadPoolExecutor
+    bitmaps = [bm for bm in decode_sup(extract_sup(video, s_index)) if bm.width >= 4 and bm.height >= 4]
     if engine != "tesseract":
         raise ValueError(f"unknown OCR engine {engine!r}")
     ok, pack = tesseract_available(lang)
     if not ok:
         raise RuntimeError(pack)
-    cues: list[OcrCue] = []
-    for i, bm in enumerate(bitmaps):
-        if bm.width < 4 or bm.height < 4:
-            continue
-        text = ocr_tesseract(to_png(bm), pack)
-        if text:
-            cues.append(OcrCue(bm.start, bm.end, text))
-        if progress and i % 50 == 0:
-            progress(i, len(bitmaps))
-    return cues
+    workers = workers or config.OCR_WORKERS
+    texts: list[str] = [""] * len(bitmaps)
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for i, text in enumerate(pool.map(lambda bm: ocr_tesseract(to_png(bm), pack), bitmaps)):
+            texts[i] = clean_ocr(text, lang)
+            done += 1
+            if progress and done % 100 == 0:
+                progress(done, len(bitmaps))
+    return [OcrCue(bm.start, bm.end, t) for bm, t in zip(bitmaps, texts) if t]
 
 
 def write_srt(cues: list[OcrCue], out: Path) -> int:
@@ -283,4 +306,15 @@ def write_srt(cues: list[OcrCue], out: Path) -> int:
 def cached_srt_for(video: Path, s_index: int, engine: str = "tesseract") -> Path:
     """Where a track's OCR result lives once made: beside the work files, never beside the video."""
     stem = video.stem[:80]
-    return config.WORK_DIR / "ocr" / f"{stem}.s{s_index}.{engine}.srt"
+    return config.WORK_DIR / "ocr" / f"{stem}.s{s_index}.{engine}.v{config.OCR_VERSION}.srt"
+
+
+def ocr_track_cached(video: Path, s_index: int, lang: str, engine: str = "tesseract", progress=None) -> tuple[Path, int, bool]:
+    """OCR a track once: (srt path, cue count, was it cached). The cache is keyed by file, track, engine and
+    OCR_VERSION; the planner and the bench both go through here."""
+    out = cached_srt_for(video, s_index, engine)
+    if out.is_file() and out.stat().st_size > 0:
+        n = sum(1 for l in out.read_text(encoding="utf-8", errors="replace").splitlines() if "-->" in l)
+        return out, n, True
+    cues = ocr_track(video, s_index, lang, engine, progress)
+    return out, write_srt(cues, out), False

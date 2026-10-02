@@ -276,6 +276,10 @@ SPEAKER_MIN_CLUSTERS = 2       # … or when the diarizer found fewer speakers t
 SPEAKER_MAX_CLUSTER_RATIO = 0.25   # … or more clusters than this share of the turns (above 8): fragmentation, not speakers
 SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
 
+# ── OCR of bitmap subtitle tracks (0.4.8) ────────────────────────────────────────────────────────────────────
+OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1,800-cue track is ~4 min on four cores)
+OCR_VERSION = 1                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
+
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
 VAD_THRESHOLD = 0.5
 VAD_MIN_SILENCE_MS = 300

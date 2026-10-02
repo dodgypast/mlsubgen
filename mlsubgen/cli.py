@@ -101,6 +101,10 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--speaker-embedding", default=None, metavar="FILE",
                    help="the speaker embedding model (a file from sherpa-onnx's speaker-recongition-models release; "
                         "`mlsubgen pull speakers` fetches it). See config.py for the known ones")
+    p.add_argument("--ocr", default="auto", choices=["auto", "off"],
+                   help="bitmap (PGS) subtitle tracks (0.4.8): auto = read them through OCR (tesseract + the language's pack) — "
+                        "a bitmap track in a target language becomes that target's .srt, one in the spoken language becomes the "
+                        "transcript; off = ignore them as before")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -357,7 +361,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 0
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold) for v, want in todo]
+                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -413,9 +417,12 @@ def cmd_run(a: argparse.Namespace) -> int:
         pr = probe(job.video, job.audio_track)
         if pr.chosen is None:
             return None
-        satisfied, source = plan_sources(job.video, pr.subs, job.targets, a.subs, code_for_tag(pr.chosen.language))
+        use_ocr = a.ocr != "off"
+        satisfied, source = plan_sources(job.video, pr.subs, job.targets, a.subs, code_for_tag(pr.chosen.language), ocr=use_ocr)
+        from .subs import bitmap_targets as _bt
+        satisfied = satisfied + list(_bt(pr.subs, job.targets, satisfied, ocr=use_ocr))
         if source is not None or len(satisfied) == len(job.targets):
-            return None                                     # the text route needs no audio
+            return None                                     # the text (or OCR) route needs no audio
         return extract_wav(job.video, pr.chosen.index, job.wav, None, None, pr.chosen.duration or pr.duration)
 
     def prefetch_after(i: int, batch: list[Job]) -> None:
@@ -1356,14 +1363,15 @@ def cmd_ocr(a: argparse.Namespace) -> int:
     ok, why = ocr.tesseract_available(lang)
     if not ok:
         _log(f"[ocr] {why}"); return 1
-    out = Path(a.out).expanduser() if a.out else ocr.cached_srt_for(video, t.index, a.engine)
     t0 = time.time()
     _log(f"[ocr] s:{t.index} {t.codec} lang={t.language} → {lang} ({why}) with {a.engine}")
-    cues = ocr.ocr_track(video, t.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
-    n = ocr.write_srt(cues, out)
-    _log(f"[ocr] {n} cues in {time.time() - t0:.0f}s → {out}")
-    if cues:
-        _log("[ocr] first lines: " + " | ".join(c.text.replace("\n", " / ") for c in cues[:3]))
+    out, n, cached = ocr.ocr_track_cached(video, t.index, lang, a.engine, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
+    if a.out:
+        import shutil as _sh
+        dest = Path(a.out).expanduser()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _sh.copy(out, dest); out = dest
+    _log(f"[ocr] {n} cues {'(cached) ' if cached else f'in {time.time() - t0:.0f}s '}→ {out}")
     return 0
 
 
@@ -1401,9 +1409,13 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     if not ok:
         _log(f"[ocr] {why}"); return 1
     t0 = time.time()
-    cues = ocr.ocr_track(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
     if a.limit:
-        cues = cues[:a.limit]
+        cues = ocr.ocr_track(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))[:a.limit]
+    else:
+        out, _n, was_cached = ocr.ocr_track_cached(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
+        cues = [ocr.OcrCue(c.start, c.end, c.text) for c in read_srt(out)]
+        if was_cached:
+            _log(f"[ocr] cached: {out.name}")
     elapsed = time.time() - t0
     import re as _re
     norm = lambda s: _re.sub(r"\s+", " ", _re.sub(r"</?i>|\{[^}]*\}", "", s)).strip().lower()
@@ -1757,6 +1769,19 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert src and src[1] == "es", "untagged audio: the first usable track in the fixed order (Spanish precedes Khmer)"
     sat, src = plan_embedded(tracks, ["km", "th"], "auto", spoken="es")
     assert sat == ["km"] and src and src[1] == "es", "an embedded target counts as done; the rest come from the spoken track"
+    # bitmap tracks through OCR (0.4.8): picked like text tracks; a bitmap track becomes a source only when the OCR
+    # engine can read its language here, and never with --ocr off
+    from .subs import bitmap_targets as _btg, ocr_ready as _ocr_ready, pick_bitmap as _pb, plan_sources as _ps
+    assert _pb(tracks, "ja").index == 5 and _pb(tracks, "en") is None
+    with tempfile.TemporaryDirectory() as d:
+        vid = Path(d) / "film.mkv"; vid.touch()
+        bm_tracks = [_ST(0, 2, "eng", "", "hdmv_pgs_subtitle", False, False, False), _ST(1, 3, "eng", "", "hdmv_pgs_subtitle", False, True, False)]
+        assert _ps(vid, bm_tracks, ["th"], "auto", spoken="en", ocr=False) == ([], None), "--ocr off: a bitmap track is not a source"
+        assert _btg(bm_tracks, ["en"], [], ocr=False) == {}
+        if _ocr_ready("en"):
+            sat, src = _ps(vid, bm_tracks, ["th"], "auto", spoken="en", ocr=True)
+            assert src and src[0].index == 0 and src[1] == "en", "the non-forced English bitmap track is the source"
+            assert list(_btg(bm_tracks, ["en", "th"], [], ocr=True)) == ["en"], "a bitmap track in a target language is OCR'd into that target"
     # models: Ollama's pull stream parses, names resolve to the right kind of download, status needs no server
     from . import models as _models
     assert _models.parse_pull_line('{"status":"pulling abc","total":100,"completed":40}') == (40, 100, "pulling abc", False)
@@ -1838,6 +1863,12 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         _seg(3.0, 0x16, pcs_on) + _seg(3.0, 0x14, pds) + _seg(3.0, 0x15, ods) + _seg(3.0, 0x80, b"") + _seg(4.0, 0x16, pcs_off) + _seg(4.0, 0x80, b"")
     assert [(b.start, b.end) for b in _ocr.decode_sup(stream2)] == [(1.0, 3.0), (3.0, 4.0)], "a replacing composition ends the previous one"
     assert _ocr.TESSERACT_LANGS["ja"] == "jpn" and _ocr.TESSERACT_LANGS["th"] == "tha"
+    # the measured OCR habits: tight dialogue dashes, a capital I read as a pipe, l'm for I'm (English only)
+    assert _ocr.clean_ocr("-Thanks. -You're welcome.", "en") == "- Thanks. - You're welcome."
+    assert _ocr.clean_ocr("Girl: | hate you, | hate you!", "en") == "Girl: I hate you, I hate you!"
+    assert _ocr.clean_ocr("l'm sure l'll go.", "en") == "I'm sure I'll go." and _ocr.clean_ocr("l'homme", "fr") == "l'homme"
+    assert _ocr.clean_ocr("a well-known man\n-Yes.", "en") == "a well-known man\n- Yes.", "hyphenated words keep their hyphen"
+    assert _ocr.clean_ocr("Tom | Jerry", "en") == "Tom | Jerry", "a pipe between words stays"
     try:
         import PIL  # noqa: F401
         png = _ocr.to_png(bms[0])

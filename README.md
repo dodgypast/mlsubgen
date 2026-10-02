@@ -123,7 +123,7 @@ files that can be re-queued with the language forced.
 
 | stage | what |
 |---|---|
-| embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR. An untagged text track has its language read from its own words |
+| embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR. An untagged text track has its language read from its own words. A **bitmap** (PGS) track is read through OCR (0.4.8): in a target language it becomes that target's .srt, in the spoken language it becomes the transcript — see *Bitmap subtitles* |
 | probe | `ffprobe` picks the audio track (tag, then title, then the default) — `mlsubgen tracks FILE` shows them, `--audio-track N` overrides |
 | audio | `ffmpeg` → 16 kHz mono wav; deleted after the file's diarization and ASR are complete |
 | speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU, before anything listens to the words; see *Speakers* |
@@ -137,6 +137,26 @@ files that can be re-queued with the language forced.
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps → `<video>.<lang>.srt` |
 
 Without `--speakers` the two speaker rows simply do not run and everything else is unchanged.
+
+### Bitmap subtitles
+
+Blu-ray remuxes carry their subtitles as PGS bitmaps, often a dozen languages of them and no text track at all,
+and until 0.4.8 mlsubgen could use none of them: a film with English subtitles in it was transcribed. Now a bitmap
+track is read through OCR (`--ocr auto`, the default; `--ocr off` restores the old behaviour):
+
+- a bitmap track in a **target** language is OCR'd straight into that target's `.srt` — the real subtitles, no
+  translation (a text track in that language still wins, and a bitmap target track only counts when a text one is
+  absent);
+- a bitmap track in the **spoken** language (or, failing that, in the usual source order) becomes the transcript
+  the other targets are translated from — human subtitles with OCR noise still beat a transcription.
+
+mlsubgen decodes the PGS stream itself (compositions, palettes, run-length objects) and hands each subtitle image
+to the OCR engine. The engine is the `tesseract` binary with the language's pack (`tesseract-data-<lang>` on Arch,
+`tesseract-ocr-<lang>` on Debian; the Docker image ships the common ones); a track whose language has no pack here
+is left alone, as before. Results are cached beside the work files, so a track is OCR'd once. `mlsubgen ocr VIDEO
+--track N` runs it by hand; `mlsubgen ocrbench VIDEO` scores the OCR against a text track of the same film —
+measured 2026-10-02 on a 1080p Blu-ray's English PGS track against its own SRT: chrF 95.8 before the cleaning
+rules for the two systematic habits found (tight dialogue dashes, a capital I read as a pipe).
 
 ### Speakers
 
