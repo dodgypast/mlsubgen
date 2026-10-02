@@ -1258,6 +1258,31 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
     print(f"\nlidbench  {video.name}" + (f"  clip {a.clip}" if clip else ""))
     print(f"  dominant language: {config.LANG_NAMES.get(dominant, dominant)}   detector v{config.LID_VERSION}"
           + (f"   speakers {job.speakers}" if job.speakers != "off" else ""))
+    spk_diag: dict = {}
+    if speakers_wanted(job):
+        # what the speaker evidence did, in one block (2026-10-02): detected vs accepted, fragmentation, how many
+        # windows the turns made, priors and purity from the detector's notes, and whether the fallback triggered
+        s = data.get("speakers") or {}
+        all_turns = s.get("turns") or []
+        detected = len({t[2] for t in all_turns})
+        accepted = len({t.speaker for t in turns}) if turns else 0
+        frag = detected / len(all_turns) if all_turns else 0.0
+        note = "; ".join(res.notes)
+        import re as _re
+        m_pri = _re.search(r"priors for (\d+) voice\(s\) settled (\d+)", note)
+        m_pur = _re.search(r"purity ([0-9.]+) over (\d+)", note)
+        m_mix = _re.search(r"(\d+) window\(s\) of voices with no single language", note)
+        spk_diag = {"detected_speakers": detected, "accepted_speakers": accepted, "turns": len(all_turns),
+                    "fragmentation": round(frag, 3), "windows": len(res.windows),
+                    "uncertain_windows": res.uncertain_windows, "fallback": not turns,
+                    "priors_voices": int(m_pri.group(1)) if m_pri else 0, "priors_settled": int(m_pri.group(2)) if m_pri else 0,
+                    "mixed_voice_windows": int(m_mix.group(1)) if m_mix else 0,
+                    "purity": float(m_pur.group(1)) if m_pur else None, "embedding": config.SPEAKER_EMBEDDING_FILE[:-5]}
+        print(f"  speakers: {detected} detected, {accepted} accepted ({'fallback — plain detector ran' if not turns else 'used'}); "
+              f"{len(all_turns)} turns, fragmentation {frag:.2f} clusters/turn; embedding {spk_diag['embedding']}")
+        print(f"            {len(res.windows)} windows ({res.uncertain_windows} uncertain); priors for {spk_diag['priors_voices']} voice(s) "
+              f"settled {spk_diag['priors_settled']}; {spk_diag['mixed_voice_windows']} window(s) of voices with no single language"
+              + (f"; voice/language purity {spk_diag['purity']:.2f}" if spk_diag["purity"] is not None else ""))
     print(f"  foreign speech in the forced track: {t_truth / 60:.1f} min"
           + (f" (of {t_raw / 60:.1f} min of forced subtitles; the rest has no detected speech — signed or on-screen text)" if t_raw - t_truth > 10 else "")
           + f"   labelled foreign by us: {t_ours / 60:.1f} min   both: {hit / 60:.1f} min")
@@ -1288,6 +1313,7 @@ def cmd_lidbench(a: argparse.Namespace) -> int:
            "ours_sec": round(t_ours, 1), "hit_sec": round(hit, 1),
            "recall": round(recall, 3), "precision": round(precision, 3),
            "switches": {k: v for k, v in sw.items() if k != "latencies"}, "foreign_blocks": len(truth_blocks),
+           "speakers_diag": spk_diag or None,
            "languages_sec": {k: round(v, 1) for k, v in ours_by_lang.items()},
            "misses": [[round(s, 1), round(e, 1), round(g, 1)] for s, e, g in misses],
            "false_alarms": [[round(s, 1), round(e, 1), round(x, 1)] for s, e, x in alarms]}

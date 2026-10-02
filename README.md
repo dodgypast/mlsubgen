@@ -125,7 +125,7 @@ files that can be re-queued with the language forced.
 |---|---|
 | embedded subs | a text track in a target language → that target is done; any other full text track (45 languages; the spoken language's first; ASS cleaned of tags, karaoke and comments) → the transcript, no ASR. An untagged text track has its language read from its own words |
 | probe | `ffprobe` picks the audio track (tag, then title, then the default) — `mlsubgen tracks FILE` shows them, `--audio-track N` overrides |
-| audio | `ffmpeg` → 16 kHz mono wav, kept until the file's diarization and ASR are done, then deleted |
+| audio | `ffmpeg` → 16 kHz mono wav; deleted after the file's diarization and ASR are complete |
 | speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU, before anything listens to the words; see *Speakers* |
 | language ID | per ~10 s of speech — or per speaker turn when the turns are known: whisper's probability + Qwen's decode + the words' script and function words; switch points refined to the exact span; a short run of another language needs strong evidence |
 | chunks | ≤ 30 s, one language each (a language change always cuts), covering the whole timeline; only stretches at the noise floor are skipped |
@@ -157,20 +157,26 @@ segmentation-3.0 (ONNX)  →  3D-Speaker embeddings  →  sherpa clustering  →
   models. sherpa's clustering is not pyannote's full pipeline; mlsubgen does not claim to reproduce it.
 - **`auto` or `N`.** `auto` lets the clustering decide the speaker count (threshold in `config.py`); `--speakers N`
   fixes it, which removes the hardest part of diarization when a cast size is known.
-- **Speaker-aware language detection.** Speech is cut at speaker changes so a detection window never holds two
-  voices, every detected speaker gets sampled, and a voice's language history is evidence for its *uncertain*
-  windows — never for its confident ones. So a character who switches language mid-scene is still followed, and
-  a bilingual voice is learnt as bilingual rather than locked to one language. That is a feature, not a limit.
+- **Speaker-aware language detection.** Speech is cut at detected speaker changes so ordinary turns from
+  different speakers are not judged together (overlapping speech can still share a window), every detected
+  speaker gets sampled, and a voice's language history is evidence for its *uncertain* windows — never for its
+  confident ones. So a character who switches language mid-scene is still followed, and a bilingual voice is
+  learnt as bilingual rather than locked to one language. That is a feature, not a limit.
 - **Cues and translation.** A speaker change closes a cue; the translator sees an anonymous tag per line (`[S2]`)
   with the rule that tags mean only "same voice / different voice", nothing about who the speaker is, and never
   appear in the output. A word that two voices cover about equally stays unlabelled.
-- **Fallback.** A file whose diarization fails the gate (one voice, or so many clusters that it is fragmentation,
-  or more ambiguous words than labelled ones) is processed exactly as without `--speakers`.
+- **Fallback.** A file whose diarization provides no useful speaker structure — a single voice (a narrator, a
+  lecture: nothing to tell apart), so many clusters that it is fragmentation rather than speakers, or more
+  ambiguous words than labelled ones — is processed exactly as without `--speakers`.
 - **Measuring it.** `mlsubgen bench VIDEO --speakers auto` against the same clip without it shows the effect on cue
   boundaries and translation; `mlsubgen lidbench VIDEO --speakers auto` scores the detector against a film's forced
-  subtitle track. On the author's test films (Babel, Inglourious Basterds, Only God Forgives) the speaker-aware
-  detector raised recall and switch recall where speakers map cleanly to languages and was mixed on feature films
-  where the clustering fragments into many voices — which is why it is off by default.
+  subtitle track. A forced track is subtitle-derived evidence, not a transcript: its cue intervals say "a language
+  other than the main one is spoken here", and only as a lower bound — songs, lines left untranslated and
+  "[speaking German]" cards are foreign speech it does not show, which is what `bench/verified.json` is for. It
+  cannot say *which* language; that needs hand-labelled intervals, which `--reference` also accepts. On the
+  author's test films (Babel, Inglourious Basterds, Only God Forgives) the speaker-aware detector raised recall
+  and switch recall where speakers map cleanly to languages and was mixed on feature films where the clustering
+  fragments into many voices — which is why it is off by default.
 
 ### Translators
 
@@ -208,7 +214,7 @@ Qwen3-ASR) and the translation. `--glossary names.tsv` (`source<TAB>target` per 
 ### What a run leaves behind
 
 Only the `.srt` files, plus `logs/skipped.log` (date, path, reason — one line per skipped file). The temp wav is
-deleted after each file's ASR and the per-file work file (detection, ASR words, cues, translations) once its last
+deleted after each file's diarization and ASR are complete, and the per-file work file (detection, ASR words, cues, translations) once its last
 `.srt` is written. An interrupted run keeps the work files of unfinished files and resumes from them; a skipped
 file remembers its verdict so a repeated run does not re-read it (`--source`, `--overwrite` or `--audio-track`
 retries it). `--keep-work` keeps the ASR cache to re-translate with another model; `mlsubgen clean` wipes leftovers.
