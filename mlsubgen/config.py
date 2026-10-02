@@ -283,7 +283,8 @@ SPEAKER_MAX_CLUSTER_RATIO = 0.25   # … or more clusters than this share of the
 SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
 
 # ── Terminology (0.5.1): the film's names rendered once per target, fed to every translation window ─────────
-TERMS_VERSION = 1              # part of the cache: bump when the extraction or the prompts change
+TERMS_VERSION = 2              # part of the cache: bump when the extraction or the prompts change
+                               # (1 → 2: the rendering call also drops ordinary words; more common katakana excluded)
 TERMS_MIN_CUES = 40            # a clip shorter than this has no recurring names worth a pass
 TERMS_MIN_OCCURRENCES = 2      # a candidate must occur this often in the transcript to be a term
 TERMS_MAX = 60                 # the most frequent terms are kept; the glossary goes into every window's prompt

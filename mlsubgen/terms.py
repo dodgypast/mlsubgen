@@ -22,7 +22,9 @@ from .segment import Cue
 _KATAKANA = re.compile(r"[ァ-ヴー]{2,}")
 _CAPITALISED = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:\s[A-ZÀ-Ý][a-zà-ÿ]{2,})?")
 _COMMON_KATAKANA = {"ドア", "テレビ", "ママ", "パパ", "トイレ", "バス", "タクシー", "コーヒー", "ビール", "ゲーム", "アイス", "カメラ",
-                    "ホテル", "レストラン", "ニュース", "メール", "パソコン", "スマホ", "ピザ", "ケーキ", "サラダ", "ジュース"}
+                    "ホテル", "レストラン", "ニュース", "メール", "パソコン", "スマホ", "ピザ", "ケーキ", "サラダ", "ジュース",
+                    "ダメ", "チーズ", "ハチミツ", "ビデオ", "バイト", "デート", "プール", "ベッド", "ソファ", "ドライブ", "ペット",
+                    "ラーメン", "カレー", "パン", "ミルク", "サッカー", "テスト", "ノート", "ペン", "ボール", "キス", "ドキドキ"}
 
 EXTRACT_PROMPT = ("Below is dialogue from {genre}, in {language}. List the proper nouns in it — people's names, "
                   "nicknames, places, organisations, ships, products, titles of works — and any invented or recurring "
@@ -30,7 +32,9 @@ EXTRACT_PROMPT = ("Below is dialogue from {genre}, in {language}. List the prope
                   "numbering, no translations.\n\n{text}")
 RENDER_PROMPT = ("These terms come from {genre} in {source}. For each, give the form that {target} subtitles would use: "
                  "the standard {target} transliteration or spelling for names, the established {target} translation for "
-                 "titles and organisations, and the usual {target} term for anything else. Be consistent and conventional. "
+                 "titles and organisations, and the usual {target} term for an invented or specialist term. If a term is "
+                 "just an ordinary word (an everyday noun, an adjective, an interjection), answer with a single hyphen "
+                 "instead of a rendering — ordinary words are not kept. Be consistent and conventional. "
                  "Answer with one line per term in the form\nterm<TAB>rendering\nand nothing else.\n\n{terms}")
 
 
@@ -130,7 +134,7 @@ def render_terms(client, terms: list[str], source: str, target: str, genre: str)
         else:
             continue
         a, b = a.strip().strip("\"'「」"), b.strip().strip("\"'「」")
-        if a in want and b and len(b) <= 60:
+        if a in want and b and len(b) <= 60 and b not in ("-", "–", "—", "—"):
             got[a] = b
     return got
 
