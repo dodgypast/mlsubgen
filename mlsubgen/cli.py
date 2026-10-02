@@ -1966,6 +1966,9 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     sel = _tm.select_terms(ja_lines, "ja", hc, ["しんちゃん", "ミサエとヒロシ", "ドア"])
     names = [t for t, _ in sel]
     assert "しんちゃん" in names and "ミサエ" in names and "ヒロシ" in names and "カスカベ" not in names and "ドア" not in names, sel
+    # a fragment of a longer word in the text is not a term, even when the whole word is a common one not kept itself
+    frag = _tm.select_terms(["ハチミツを食べる", "ハチミツが好き"], "ja", {}, ["ハチミ"])
+    assert [t for t, _ in frag] == [], frag
     en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
     he = _tm.heuristic_candidates(en_lines, "en")
     assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he

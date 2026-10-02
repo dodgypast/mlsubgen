@@ -30,11 +30,12 @@ EXTRACT_PROMPT = ("Below is dialogue from {genre}, in {language}. List the prope
                   "nicknames, places, organisations, ships, products, titles of works — and any invented or recurring "
                   "special terms. One per line, exactly as written in the text, nothing else: no explanations, no "
                   "numbering, no translations.\n\n{text}")
+# Every recurring term is rendered, names or not: 0.5.0.2 asked the model to drop "ordinary words" and it dropped
+# the beetle and the oak the episode is about — the two terms the pass had demonstrably made consistent — while
+# keeping "police". Recurrence is the criterion; the model's idea of a proper noun is not.
 RENDER_PROMPT = ("These terms come from {genre} in {source}. For each, give the form that {target} subtitles would use: "
                  "the standard {target} transliteration or spelling for names, the established {target} translation for "
-                 "titles and organisations, and the usual {target} term for an invented or specialist term. If a term is "
-                 "just an ordinary word (an everyday noun, an adjective, an interjection), answer with a single hyphen "
-                 "instead of a rendering — ordinary words are not kept. Be consistent and conventional. "
+                 "titles and organisations, and the usual {target} word for anything else. Be consistent and conventional. "
                  "Answer with one line per term in the form\nterm<TAB>rendering\nand nothing else.\n\n{terms}")
 
 
@@ -42,14 +43,22 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def katakana_runs(texts: list[str]) -> dict[str, int]:
+    """Every run of katakana in the text with its count — common words included (the fragment check needs them)."""
+    counts: dict[str, int] = {}
+    for t in texts:
+        for m in _KATAKANA.findall(t):
+            counts[m] = counts.get(m, 0) + 1
+    return counts
+
+
 def heuristic_candidates(texts: list[str], lang: str) -> dict[str, int]:
     """Likely names by script alone, with counts."""
     counts: dict[str, int] = {}
     if lang == "ja":
-        for t in texts:
-            for m in _KATAKANA.findall(t):
-                if m not in _COMMON_KATAKANA and len(m) >= 2:
-                    counts[m] = counts.get(m, 0) + 1
+        for m, n in katakana_runs(texts).items():
+            if m not in _COMMON_KATAKANA and len(m) >= 2:
+                counts[m] = n
     elif lang in ("en", "de", "fr", "es", "it", "pt", "nl", "sv", "da", "no", "fi", "pl", "cs", "hu", "ro", "tr", "id", "ms", "tl", "vi", "ca", "hr", "sk", "sl", "lt", "lv", "et"):
         for t in texts:
             for m in _CAPITALISED.findall(". " + t):           # a line start is a sentence start: capitalised anyway
@@ -95,17 +104,22 @@ def llm_candidates(client, texts: list[str], lang: str, genre: str, max_calls: i
 
 
 def select_terms(texts: list[str], lang: str, heuristic: dict[str, int], from_llm: list[str]) -> list[tuple[str, int]]:
-    """Merge, count in the text, keep the recurring ones, cap by frequency."""
+    """Merge, count in the text, keep the recurring ones, cap by frequency. A candidate that is a fragment of a
+    longer word in the text — kept or not — is dropped: 0.5.0.2 rendered ハチミ, cut from ハチミツ (honey), as a
+    name, because the whole word was on the common list and so no longer there to fold the fragment into."""
     cand = dict(heuristic)
     for s in from_llm:
         if s not in cand:
             cand[s] = count_in(texts, s)
+    longer = dict(cand)
+    if lang == "ja":
+        for m, n in katakana_runs(texts).items():
+            longer[m] = max(longer.get(m, 0), n)
     keep = [(t, n) for t, n in cand.items() if n >= config.TERMS_MIN_OCCURRENCES]
     keep.sort(key=lambda tn: (-tn[1], tn[0]))
-    # a term contained in a longer kept term with the same count is the longer one's fragment (Shin → Shin-chan)
     out: list[tuple[str, int]] = []
     for t, n in keep:
-        if any(t != o and t in o and n <= m for o, m in keep):
+        if any(t != o and t in o and n <= m for o, m in longer.items()):
             continue
         out.append((t, n))
     return out[:config.TERMS_MAX]
