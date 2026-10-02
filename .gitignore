@@ -11,5 +11,6 @@ __pycache__/
 mlsubgen.db*
 worker.lock
 settings.json
+tests/pgs/
 run-*.log
 .env

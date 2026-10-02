@@ -1485,6 +1485,67 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_why(a: argparse.Namespace) -> int:
+    """`mlsubgen why VIDEO` — why each subtitle file of this video says what it says (0.5.0.6): where the transcript
+    came from, what detected the languages, whether speakers and terms were used, which model translated. Read
+    from the work file; nothing is run."""
+    from .pipeline import Job, srt_path_for
+    video = Path(a.video).expanduser()
+    job = Job(video, clip_arg(a.clip) if a.clip else None)
+    if not job.work_file.is_file():
+        _log(f"no work file for {video.name} ({job.work_file.name}) — it has not been processed here"); return 1
+    data = work.load(job.work_file)
+    print(f"{video.name}" + (f"  clip {a.clip}" if a.clip else ""))
+    print(f"  work file: {job.work_file}")
+    src = data.get("source") or {}
+    gate = data.get("ocr_gate") or {}
+    if src.get("embedded_subtitles") is not None:
+        print(f"  transcript: embedded text track s:{src['embedded_subtitles']} ({src.get('codec')}, {config.LANG_NAMES.get(src.get('language'), src.get('language'))}, {src.get('raw_cues')} cues) — no ASR")
+    elif src.get("sidecar"):
+        print(f"  transcript: {Path(src['sidecar']).name} beside the video ({config.LANG_NAMES.get(src.get('language'), src.get('language'))}) — no ASR")
+    elif src.get("ocr_track") is not None:
+        g = gate.get(f"s:{src['ocr_track']}") or {}
+        print(f"  transcript: bitmap track s:{src['ocr_track']} ({src.get('codec')}, {config.LANG_NAMES.get(src.get('language'), src.get('language'))}) read by OCR"
+              f"{' — gate: ' + g.get('why', '?') if g else ''}, {src.get('raw_cues')} cues — no ASR")
+    else:
+        asr = data.get("asr") or {}
+        for key, e in asr.items():
+            ms = e.get("merge_stats") or {}
+            print(f"  transcript: ASR ({e.get('engines')}, {e.get('mode', 'single')} mode, {e.get('elapsed')}s)"
+                  + (f"; merge: agreed {ms.get('agree', 0)}, reconciled by the LLM {ms.get('llm', 0)}, one engine {ms.get('qwen', 0) + ms.get('whisper', 0)}"
+                     + (f" ({e.get('merge_model')})" if e.get("merge_model") else "") if ms else (" — merge pending" if e.get("merge") == "pending" else "")))
+    lid_d = data.get("lid")
+    if lid_d:
+        try:
+            from .lid import LidResult
+            r = LidResult.from_dict(lid_d)
+            print(f"  languages: {r.summary()}" + (f"  (forced)" if lid_d.get("forced") else "") + (f"  [speakers {lid_d['speakers']}]" if lid_d.get("speakers") not in (None, "off") else ""))
+        except Exception:                                            # noqa: BLE001 — an old work file
+            print(f"  languages: {lid_d.get('summary', '?')}")
+    spk = data.get("speakers")
+    if spk:
+        voices = len({t[2] for t in spk.get('turns', [])})
+        print(f"  speakers: diarized ({spk.get('mode')}, {voices} voices, {len(spk.get('turns', []))} turns, {spk.get('embedding', '?')[:-5] if spk.get('embedding') else '?'})")
+    for k, g in gate.items():
+        if k != f"s:{src.get('ocr_track')}":
+            print(f"  OCR {k} ({config.LANG_NAMES.get(g.get('language'), g.get('language'))}): {'used' if g.get('usable') else 'rejected'} — {g.get('why')}")
+    for key, t in (data.get("terms") or {}).items():
+        print(f"  terms: {len(t.get('terms', []))} recurring term(s), rendered for {', '.join(t.get('renderings', {}).keys()) or 'nothing yet'} ({t.get('model')})")
+    cue_sets = data.get("cues") or {}
+    for tkey, t in (data.get("translations") or {}).items():
+        target = t.get("target")
+        copied = sum(1 for c in t.get("cues", []) if c.get("flags") and "copied" in c["flags"])
+        out = srt_path_for(video, target)
+        state = ("written " + time.strftime("%Y-%m-%d %H:%M", time.localtime(out.stat().st_mtime))) if out.is_file() else "no .srt beside the video"
+        print(f"  {config.LANG_NAMES.get(target, target)}: {len(t.get('cues', []))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
+              + (f", {copied} copied through" if copied else "") + (" — PARTIAL (interrupted)" if t.get("partial") else "")
+              + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if tkey.endswith("|terms") else "")
+              + f"; {state}")
+    if not data.get("translations"):
+        print("  translations: none recorded" + (f"; cue sets: {len(cue_sets)}" if cue_sets else ""))
+    return 0
+
+
 def cmd_config(a: argparse.Namespace) -> int:
     """`mlsubgen config` shows the settings that matter and where each comes from; `mlsubgen config targets en,th`
     saves the default subtitle languages (the web form's "make these the default" does the same); `--clear` forgets
@@ -2004,6 +2065,20 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     # (a name at a sentence start is not counted by the heuristic — the LLM pass is what finds those)
     assert _tm.build_glossary({"ミサエ": "มิซาเอะ", "ヒロシ": "ฮิโรชิ"}, {"ミサエ": "มิซาเอ"}) == {"ミサエ": "มิซาเอ", "ヒロシ": "ฮิโรชิ"}
     assert _tm._chunks(["a" * 100] * 50, 1000) and sum(len(p) for p in _tm._chunks(["a" * 100] * 50, 1000)) >= 5000
+    # the PGS regression corpus (0.5.0.6): real streams trimmed to a few display sets, kept OUT of the repository
+    # (film content) under MLSUBGEN_HOME/tests/pgs with a manifest; checked when present, skipped when not
+    import hashlib
+    import json as _json
+    corpus = config.MLSUBGEN_HOME / "tests" / "pgs"
+    manifest = corpus / "manifest.json"
+    if manifest.is_file():
+        for name, exp in _json.loads(manifest.read_text(encoding="utf-8")).items():
+            bms2 = _ocr.decode_sup((corpus / name).read_bytes())
+            assert len(bms2) == exp["bitmaps"], f"{name}: {len(bms2)} bitmaps, expected {exp['bitmaps']}"
+            f0 = bms2[0]
+            assert [round(f0.start, 2), round(f0.end, 2), f0.width, f0.height] == exp["first"], (name, f0.start, f0.end, f0.width, f0.height)
+            assert hashlib.sha1(f0.rgba).hexdigest()[:12] == exp["sha1"], f"{name}: first bitmap's pixels changed"
+        print(f"PGS corpus: {len(_json.loads(manifest.read_text(encoding='utf-8')))} stream(s) decode as recorded")
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None
@@ -2128,6 +2203,10 @@ def main(argv: list[str] | None = None) -> int:
     m.set_defaults(fn=cmd_models)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.set_defaults(fn=cmd_languages)
+    wy = sub.add_parser("why", help="why each subtitle file of a video says what it says: transcript source, detection, speakers, terms, translator (from the work file)")
+    wy.add_argument("video")
+    wy.add_argument("--clip", default=None, help="the clip's work file instead (START-END as given to bench)")
+    wy.set_defaults(fn=cmd_why)
     cf = sub.add_parser("config", help="show the settings and where they come from; `config targets en,th` saves the default subtitle languages")
     cf.add_argument("key", nargs="?", choices=["targets"], help="what to set (targets = the default subtitle languages)")
     cf.add_argument("value", nargs="?", help="the new value, e.g. en,th")

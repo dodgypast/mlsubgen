@@ -199,6 +199,27 @@ def decode_sup(data: bytes) -> list[Bitmap]:
     return out
 
 
+def trim_sup(data: bytes, n_sets: int) -> bytes:
+    """The stream cut after `n_sets` complete display sets (a composition and, after it, its clear or its
+    replacement), for the regression corpus (0.5.0.6): real authoring, a few hundred kilobytes."""
+    pos, n, shown = 0, len(data), 0
+    end_at = n
+    while pos + 13 <= n:
+        if data[pos:pos + 2] != b"PG":
+            pos += 1
+            continue
+        size = int.from_bytes(data[pos + 11:pos + 13], "big")
+        seg_type = data[pos + 10]
+        payload = data[pos + 13:pos + 13 + size]
+        if seg_type == 0x16 and len(payload) >= 11 and payload[10] > 0:
+            shown += 1
+        if seg_type == 0x80 and shown > n_sets:
+            end_at = pos + 13 + size
+            break
+        pos += 13 + size
+    return data[:end_at]
+
+
 def extract_sup(video: Path, s_index: int) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".sup", delete=False) as f:
         sup = Path(f.name)
