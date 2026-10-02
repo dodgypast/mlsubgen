@@ -280,6 +280,8 @@ SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the 
 OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1,800-cue track is ~4 min on four cores)
 OCR_VERSION = 2                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
                                # (1 → 2: underscore-for-dash and bare-l-for-I rules, from the full-track measurement)
+OCR_PREP = os.environ.get("MLSUBGEN_OCR_PREP", "binary")   # how the subtitle image is prepared for tesseract: binary | fill | gray | fill3x
+OCR_VLM_MODEL = os.environ.get("MLSUBGEN_OCR_VLM", "gemma4:31b-it-qat")   # the vision model for --engine vlm (needs `vision` in Ollama)
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
 VAD_THRESHOLD = 0.5

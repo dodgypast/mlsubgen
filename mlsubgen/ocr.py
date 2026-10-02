@@ -70,6 +70,9 @@ def _rle_decode(data: bytes, width: int, height: int) -> bytearray:
             x = 0; y += 1
             continue
         flag = b2 & 0xC0
+        need = 0 if flag == 0x00 else (1 if flag in (0x40, 0x80) else 2)
+        if pos + need > n:                        # a truncated fragment (2026-10-02: a Blu-ray's Chinese track): keep what decoded
+            break
         if flag == 0x00:                          # 00LLLLLL: L zeros
             run, color = b2 & 0x3F, 0
         elif flag == 0x40:                        # 01LLLLLL LLLLLLLL: L zeros
@@ -208,19 +211,39 @@ def extract_sup(video: Path, s_index: int) -> bytes:
 
 
 # ── images for OCR ───────────────────────────────────────────────────────────────────────────────────────────
-def to_png(bm: Bitmap, scale: int = 2) -> bytes:
+PREP_MODES = ("binary", "fill", "gray", "fill3x")
+
+
+def to_png(bm: Bitmap, scale: int = 2, mode: str | None = None) -> bytes:
     """Black text on white, upscaled: what OCR engines read best. Subtitle bitmaps are light text with a dark
-    outline on transparency; luminance over an opaque white background is inverted so the glyphs are dark."""
+    outline on transparency. Modes (OCR_PREP; measured on a Thai track 2026-10-02 — see config):
+      binary  luminance over black, inverted, binarised at 140 — the outline mostly goes with the background
+      fill    the glyph FILL only: opaque pixels that are light; the outline is dropped by construction, and thin
+              marks above the line (Thai tone marks) survive because nothing is thresholded away
+      gray    the inverted luminance, no binarisation: tesseract thresholds itself
+      fill3x  fill at 3× instead of 2×
+    """
+    import numpy as np
     from PIL import Image, ImageOps
+    mode = mode or config.OCR_PREP
+    if mode == "fill3x":
+        mode, scale = "fill", 3
     img = Image.frombytes("RGBA", (bm.width, bm.height), bm.rgba)
-    bg = Image.new("RGBA", img.size, (0, 0, 0, 255))
-    bg.alpha_composite(img)
-    g = ImageOps.invert(bg.convert("L"))                 # light glyphs → dark on light
-    g = ImageOps.autocontrast(g)
+    if mode == "fill":
+        a = np.frombuffer(bm.rgba, dtype=np.uint8).reshape(bm.height, bm.width, 4)
+        lum = 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
+        ink = (a[..., 3] > 64) & (lum > 110)              # opaque and light = the fill; the dark outline is left out
+        g = Image.fromarray(np.where(ink, 0, 255).astype(np.uint8), "L")
+    else:
+        bg = Image.new("RGBA", img.size, (0, 0, 0, 255))
+        bg.alpha_composite(img)
+        g = ImageOps.invert(bg.convert("L"))             # light glyphs → dark on light
+        g = ImageOps.autocontrast(g)
     g = ImageOps.expand(g, border=12 * scale, fill=255)
     if scale > 1:
         g = g.resize((g.width * scale, g.height * scale), Image.LANCZOS)
-    g = g.point(lambda v: 255 if v > 140 else 0)         # binarise: the outline goes with the background
+    if mode == "binary":
+        g = g.point(lambda v: 255 if v > 140 else 0)     # binarise: the outline goes with the background
     buf = io.BytesIO()
     g.save(buf, format="PNG")
     return buf.getvalue()
@@ -259,7 +282,10 @@ _ITALIC_I = _re.compile(r"\biI(?=[a-z])")                        # an italic cap
 def clean_ocr(text: str, lang: str) -> str:
     """The systematic habits of OCR'd subtitles, measured on a Blu-ray against its own SRT (2026-10-02): dialogue
     dashes written tight (`-thanks.`) where subtitlers space them (`- thanks.`), and tesseract reading a capital I
-    as a pipe (`| hate you`). English only for the l'm/l'll kind — French has l'homme."""
+    as a pipe (`| hate you`). English only for the l'm/l'll kind — French has l'homme. Thai: tesseract writes
+    sara am as nikhahit + sara aa (two code points); the one-character form is what every text uses."""
+    if lang == "th":
+        text = text.replace("\u0e4d\u0e32", "\u0e33")
     text = _DASH_START.sub("- ", text)
     text = _DASH_MID.sub("- ", text)
     text = _PIPE_I.sub("I", text)
@@ -270,25 +296,99 @@ def clean_ocr(text: str, lang: str) -> str:
     return "\n".join(l for l in lines if l)
 
 
+VLM_PROMPT = ("This image is one subtitle from a film, in {language}. Transcribe its text exactly as written: every "
+              "character, line breaks as line breaks, nothing added, nothing explained, no quotation marks around it. "
+              "If the image holds no text, answer with an empty line.")
+
+
+def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = None) -> str:
+    """A vision model through Ollama reads the subtitle image (0.4.8). The model is config.OCR_VLM_MODEL (a model
+    with the `vision` capability — gemma4 and qwen3.8 both have it); temperature 0."""
+    import base64
+    import json
+    import urllib.request
+    model = model or config.OCR_VLM_MODEL
+    url = (url or config.LLM_URL).rstrip("/") + "/api/generate"
+    body = {"model": model, "prompt": VLM_PROMPT.format(language=config.LANG_NAMES.get(lang, lang)),
+            "images": [base64.b64encode(png).decode("ascii")], "stream": False,
+            "options": {"temperature": 0, "num_predict": 200}, "keep_alive": "10m"}
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        text = json.loads(resp.read().decode("utf-8")).get("response", "")
+    text = text.strip().strip("\"'“”")
+    if text.lower() in ("(empty)", "empty", "none", "no text", "[no text]"):
+        return ""
+    return "\n".join(l.strip() for l in text.splitlines() if l.strip())
+
+
+def vlm_png(bm: Bitmap) -> bytes:
+    """What a vision model sees: the subtitle as it is on screen (composited on a dark background, 2×) — a VLM
+    reads styled text better than a binarised one."""
+    from PIL import Image, ImageOps
+    img = Image.frombytes("RGBA", (bm.width, bm.height), bm.rgba)
+    bg = Image.new("RGBA", img.size, (24, 24, 24, 255))
+    bg.alpha_composite(img)
+    g = ImageOps.expand(bg.convert("RGB"), border=16, fill=(24, 24, 24))
+    g = g.resize((g.width * 2, g.height * 2), Image.LANCZOS)
+    buf = io.BytesIO()
+    g.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def engine_available(engine: str, lang: str) -> tuple[bool, str]:
+    if engine == "tesseract":
+        return tesseract_available(lang)
+    if engine == "vlm":
+        try:
+            import urllib.request
+            with urllib.request.urlopen(config.LLM_URL.rstrip("/") + "/api/tags", timeout=5) as r:
+                names = {m.get("name") for m in __import__("json").loads(r.read().decode()).get("models", [])}
+        except Exception as e:                                      # noqa: BLE001
+            return False, f"Ollama not reachable at {config.LLM_URL}: {e}"
+        if config.OCR_VLM_MODEL not in names:
+            return False, f"vision model {config.OCR_VLM_MODEL} is not in Ollama (ollama pull it, or set OCR_VLM_MODEL)"
+        return True, config.OCR_VLM_MODEL
+    return False, f"unknown OCR engine {engine!r}"
+
+
 def ocr_track(video: Path, s_index: int, lang: str, engine: str = "tesseract", progress=None,
-              workers: int | None = None) -> list[OcrCue]:
+              workers: int | None = None, prep: str | None = None) -> list[OcrCue]:
     """A bitmap track → cues. `lang` picks the OCR language pack; `progress(done, total)` is called as it goes.
-    tesseract is one process per image, so several run at once (`workers`, default OCR_WORKERS)."""
-    from concurrent.futures import ThreadPoolExecutor
+    tesseract is one process per image, so several run at once (`workers`, default OCR_WORKERS); the vision model
+    is asked one image at a time (the GPU is the bottleneck, not the request)."""
     bitmaps = [bm for bm in decode_sup(extract_sup(video, s_index)) if bm.width >= 4 and bm.height >= 4]
-    if engine != "tesseract":
-        raise ValueError(f"unknown OCR engine {engine!r}")
-    ok, pack = tesseract_available(lang)
+    return ocr_track_images(bitmaps, lang, engine, progress, workers, prep)
+
+
+def ocr_track_images(bitmaps: list[Bitmap], lang: str, engine: str = "tesseract", progress=None,
+                     workers: int | None = None, prep: str | None = None) -> list[OcrCue]:
+    """The OCR of already-decoded images (ocr_track does the decoding; a bench may read only the first N)."""
+    from concurrent.futures import ThreadPoolExecutor
+    bitmaps = [bm for bm in bitmaps if bm.width >= 4 and bm.height >= 4]
+    ok, why = engine_available(engine, lang)
     if not ok:
-        raise RuntimeError(pack)
-    workers = workers or config.OCR_WORKERS
+        raise RuntimeError(why)
     texts: list[str] = [""] * len(bitmaps)
     done = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for i, text in enumerate(pool.map(lambda bm: ocr_tesseract(to_png(bm), pack), bitmaps)):
-            texts[i] = clean_ocr(text, lang)
+    if engine == "tesseract":
+        pack = why
+        workers = workers or config.OCR_WORKERS
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for i, text in enumerate(pool.map(lambda bm: ocr_tesseract(to_png(bm, mode=prep), pack), bitmaps)):
+                texts[i] = clean_ocr(text, lang)
+                done += 1
+                if progress and done % 100 == 0:
+                    progress(done, len(bitmaps))
+    else:
+        for i, bm in enumerate(bitmaps):
+            try:
+                texts[i] = clean_ocr(ocr_vlm(vlm_png(bm), lang), lang)
+            except Exception as e:                                  # noqa: BLE001 — one bad image must not sink the track
+                texts[i] = ""
+                if i < 3:
+                    print(f"[ocr] vlm failed on image {i}: {e}", flush=True)
             done += 1
-            if progress and done % 100 == 0:
+            if progress and done % 50 == 0:
                 progress(done, len(bitmaps))
     return [OcrCue(bm.start, bm.end, t) for bm, t in zip(bitmaps, texts) if t]
 

@@ -1341,8 +1341,9 @@ def _pick_bitmap_track(pr, index: int | None, lang: str | None):
         tracks = [t for t in tracks if t.index == index]
     elif lang:
         from .subs import code_for_tag
-        tracks = [t for t in tracks if code_for_tag(t.language) == lang and not t.forced] or \
-                 [t for t in tracks if code_for_tag(t.language) == lang]
+        want = {"zh", "yue"} if lang in ("zh", "yue") else {lang}       # a `chi` tag covers both Chinese scripts
+        tracks = [t for t in tracks if code_for_tag(t.language) in want and not t.forced] or \
+                 [t for t in tracks if code_for_tag(t.language) in want]
     return tracks[0] if tracks else None
 
 
@@ -1360,7 +1361,7 @@ def cmd_ocr(a: argparse.Namespace) -> int:
     if t is None:
         _log("no bitmap subtitle track matched — pick one with --track N:"); _log(describe_tracks(pr)); return 1
     lang = a.lang or code_for_tag(t.language) or "en"
-    ok, why = ocr.tesseract_available(lang)
+    ok, why = ocr.engine_available(a.engine, lang)
     if not ok:
         _log(f"[ocr] {why}"); return 1
     t0 = time.time()
@@ -1406,18 +1407,25 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
         tmp.parent.mkdir(parents=True, exist_ok=True)
         extract_track(video, rt.index, tmp, rt.codec)
         ref = read_srt(tmp); where = f"s:{rt.index} {rt.codec}"
-    ok, why = ocr.tesseract_available(lang)
+    ok, why = ocr.engine_available(a.engine, lang)
     if not ok:
         _log(f"[ocr] {why}"); return 1
     t0 = time.time()
     if a.limit:
-        cues = ocr.ocr_track(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))[:a.limit]
+        bitmaps = ocr.decode_sup(ocr.extract_sup(video, bm.index))
+        # with a limit, only the first N images are read (a vision model is slow; a sweep needs many runs)
+        if len(bitmaps) > a.limit:
+            cut = bitmaps[a.limit].start
+            ref = [r for r in ref if r.start < cut]
+        cues = ocr.ocr_track_images(bitmaps[:a.limit], lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"), prep=a.prep)
     else:
         out, _n, was_cached = ocr.ocr_track_cached(video, bm.index, lang, a.engine, progress=lambda d, n: _log(f"[ocr] {d}/{n}"))
         cues = [ocr.OcrCue(c.start, c.end, c.text) for c in read_srt(out)]
         if was_cached:
             _log(f"[ocr] cached: {out.name}")
     elapsed = time.time() - t0
+    if a.prep:
+        where += f" · prep {a.prep}"
     import re as _re
     norm = lambda s: _re.sub(r"\s+", " ", _re.sub(r"</?i>|\{[^}]*\}", "", s)).strip().lower()
     pairs = []
@@ -1874,6 +1882,17 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.clean_ocr("...l knew...", "en") == "...I knew..." and _ocr.clean_ocr("l knew", "fr") == "l knew"
     assert _ocr.clean_ocr("the_name", "en") == "the_name", "an underscore inside a word stays"
     assert _ocr.clean_ocr("iIn Nazi-occupied France", "en") == "In Nazi-occupied France", "an italic I read twice"
+    assert _ocr.clean_ocr("ท\u0e4d\u0e32ให้", "th") == "ทำให้", "Thai sara am as one character"
+    # a truncated run-length fragment decodes what it can instead of raising
+    assert len(_ocr._rle_decode(bytes([0, 0x84]), 4, 1)) == 4
+    assert _ocr.VLM_PROMPT.format(language="Thai").startswith("This image is one subtitle")
+    try:
+        import PIL  # noqa: F401
+        for m in _ocr.PREP_MODES:
+            assert _ocr.to_png(bms[0], mode=m)[:8] == b"\x89PNG\r\n\x1a\n", m
+        assert _ocr.vlm_png(bms[0])[:8] == b"\x89PNG\r\n\x1a\n"
+    except ImportError:
+        pass
     try:
         import PIL  # noqa: F401
         png = _ocr.to_png(bms[0])
@@ -1958,14 +1977,17 @@ def main(argv: list[str] | None = None) -> int:
     oc.add_argument("video")
     oc.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N (see `mlsubgen tracks`)")
     oc.add_argument("--lang", default=None, help="the OCR language (default: the track's tag)")
-    oc.add_argument("--engine", default="tesseract", choices=["tesseract"])
+    oc.add_argument("--engine", default="tesseract", choices=["tesseract", "vlm"],
+                    help="tesseract (the binary + its language pack) or vlm (a vision model through Ollama: config.OCR_VLM_MODEL)")
     oc.add_argument("--out", default=None, help="write the .srt here instead of the cache")
     oc.set_defaults(fn=cmd_ocr)
     ob = sub.add_parser("ocrbench", help="score the OCR of a bitmap track against a text track of the same film")
     ob.add_argument("video")
     ob.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N")
     ob.add_argument("--lang", default=None)
-    ob.add_argument("--engine", default="tesseract", choices=["tesseract"])
+    ob.add_argument("--engine", default="tesseract", choices=["tesseract", "vlm"])
+    ob.add_argument("--prep", default=None, choices=list(config.OCR_PREP_MODES) if hasattr(config, "OCR_PREP_MODES") else ["binary", "fill", "gray", "fill3x"],
+                    help="image preparation for tesseract (default: config OCR_PREP)")
     ob.add_argument("--reference", default=None, help="a .srt to compare with (default: the film's text track in that language)")
     ob.add_argument("--reference-track", type=int, default=None, metavar="N")
     ob.add_argument("--ref-lang", default=None, help="language of the text track to compare with when it differs from --lang (zh text vs yue = chi_tra OCR)")
