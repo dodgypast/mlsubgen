@@ -1392,10 +1392,11 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     if bm is None:
         _log("no bitmap track matched"); _log(describe_tracks(pr)); return 1
     lang = a.lang or code_for_tag(bm.language) or "en"
+    ref_lang = a.ref_lang or lang                     # chi_tra is read as `yue` here; the text track is still tagged chi
     if a.reference:
         ref = read_srt(Path(a.reference).expanduser()); where = Path(a.reference).name
     else:
-        texts = [t for t in pr.subs if t.is_text and code_for_tag(t.language) == lang and not t.forced]
+        texts = [t for t in pr.subs if t.is_text and code_for_tag(t.language) == ref_lang and not t.forced]
         if a.reference_track is not None:
             texts = [t for t in pr.subs if t.index == a.reference_track]
         if not texts:
@@ -1967,6 +1968,7 @@ def main(argv: list[str] | None = None) -> int:
     ob.add_argument("--engine", default="tesseract", choices=["tesseract"])
     ob.add_argument("--reference", default=None, help="a .srt to compare with (default: the film's text track in that language)")
     ob.add_argument("--reference-track", type=int, default=None, metavar="N")
+    ob.add_argument("--ref-lang", default=None, help="language of the text track to compare with when it differs from --lang (zh text vs yue = chi_tra OCR)")
     ob.add_argument("--limit", type=int, default=0, help="score only the first N OCR cues (0 = all)")
     ob.add_argument("--show", type=int, default=10)
     ob.set_defaults(fn=cmd_ocrbench)
