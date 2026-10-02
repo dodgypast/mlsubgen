@@ -112,9 +112,15 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         out = srt_path_for(job.video, t)
         write_srt(out, got)
         satisfied.append(t)
+        data.setdefault("video", str(job.video))
+        data.setdefault("ocr_targets", {})[t] = {"track": track.index, "codec": track.codec, "title": track.title,
+                                                 "engine": ocr.engine_for(t), "cues": len(got), "ocr_version": config.OCR_VERSION,
+                                                 "written": time.strftime("%Y-%m-%d %H:%M")}
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are a bitmap track (s:{track.index} {track.codec}"
              f"{', ' + track.title if track.title else ''}) — OCR'd with {ocr.engine_for(t)}{' (cached)' if cached else ''} "
              f"into {out.name}: {len(got)} cues")
+    if data.get("ocr_targets") or data.get("ocr_gate"):
+        work.save(job.work_file, data)                 # a run that OCRs its targets and transcribes nothing still leaves a record
     remaining = [t for t in targets if t not in satisfied]
     if source is None and remaining and use_ocr:
         _, source = plan_sources(job.video, pr.subs, remaining, mode, spoken, ocr=True)      # a bitmap source, if any

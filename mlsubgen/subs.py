@@ -66,12 +66,16 @@ def pick(subs: list[SubTrack], lang: str) -> SubTrack | None:
     return None
 
 
+PGS_CODECS = {"hdmv_pgs_subtitle"}     # the bitmap format the decoder reads; VobSub (dvd_subtitle) is a different one — not yet
+
+
 def pick_bitmap(subs: list[SubTrack], lang: str) -> SubTrack | None:
-    """The first usable bitmap (PGS/VobSub) track in `lang` — the same rules as `pick`, for the tracks OCR can
-    read (0.4.8). SDH tracks (a title saying so) come after plain ones."""
+    """The first usable PGS track in `lang` — the same rules as `pick`, for the tracks OCR can read (0.4.8).
+    SDH tracks (a title saying so) come after plain ones. VobSub tracks are not PGS (0.5.0.7: one was fed to the
+    PGS decoder and crashed it) and are left alone."""
     tags = LANG_TAGS.get(lang, {lang})
     words = TITLE_WORDS.get(lang, ())
-    found = [t for t in subs if not t.is_text and not t.forced and not PARTIAL_RE.search(t.title)
+    found = [t for t in subs if not t.is_text and t.codec in PGS_CODECS and not t.forced and not PARTIAL_RE.search(t.title)
              and (t.language in tags or any(w in t.title.lower() for w in words))]
     found.sort(key=lambda t: 1 if re.search(r"sdh|hearing|cc\b", t.title, re.I) else 0)
     return found[0] if found else None

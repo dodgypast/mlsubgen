@@ -1340,7 +1340,8 @@ def _hms(t: float) -> str:
 
 
 def _pick_bitmap_track(pr, index: int | None, lang: str | None):
-    tracks = [t for t in pr.subs if not t.is_text]
+    from .subs import PGS_CODECS
+    tracks = [t for t in pr.subs if not t.is_text and t.codec in PGS_CODECS]
     if index is not None:
         tracks = [t for t in tracks if t.index == index]
     elif lang:
@@ -1531,12 +1532,19 @@ def cmd_why(a: argparse.Namespace) -> int:
             print(f"  OCR {k} ({config.LANG_NAMES.get(g.get('language'), g.get('language'))}): {'used' if g.get('usable') else 'rejected'} — {g.get('why')}")
     for key, t in (data.get("terms") or {}).items():
         print(f"  terms: {len(t.get('terms', []))} recurring term(s), rendered for {', '.join(t.get('renderings', {}).keys()) or 'nothing yet'} ({t.get('model')})")
+    for t, o in (data.get("ocr_targets") or {}).items():
+        out = srt_path_for(video, t)
+        print(f"  {config.LANG_NAMES.get(t, t)}: the real subtitles — bitmap track s:{o.get('track')}{', ' + o['title'] if o.get('title') else ''} read by "
+              f"{o.get('engine')} ({o.get('cues')} cues) into {out.name}; " + ("present" if out.is_file() else "not beside the video now"))
     cue_sets = data.get("cues") or {}
     for tkey, t in (data.get("translations") or {}).items():
         target = t.get("target")
         copied = sum(1 for c in t.get("cues", []) if c.get("flags") and "copied" in c["flags"])
         out = srt_path_for(video, target)
-        state = ("written " + time.strftime("%Y-%m-%d %H:%M", time.localtime(out.stat().st_mtime))) if out.is_file() else "no .srt beside the video"
+        if job.clip:
+            state = "a clip: the output is a bench page, not a sidecar"
+        else:
+            state = ("written " + time.strftime("%Y-%m-%d %H:%M", time.localtime(out.stat().st_mtime))) if out.is_file() else "no .srt beside the video"
         print(f"  {config.LANG_NAMES.get(target, target)}: {len(t.get('cues', []))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
               + (f", {copied} copied through" if copied else "") + (" — PARTIAL (interrupted)" if t.get("partial") else "")
               + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if tkey.endswith("|terms") else "")
@@ -1887,6 +1895,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory() as d:
         vid = Path(d) / "film.mkv"; vid.touch()
         bm_tracks = [_ST(0, 2, "eng", "", "hdmv_pgs_subtitle", False, False, False), _ST(1, 3, "eng", "", "hdmv_pgs_subtitle", False, True, False)]
+        assert _pb([_ST(0, 2, "eng", "", "dvd_subtitle", False, False, False)], "en") is None, "VobSub is not PGS: not picked"
         assert _ps(vid, bm_tracks, ["th"], "auto", spoken="en", ocr=False) == ([], None), "--ocr off: a bitmap track is not a source"
         assert _btg(bm_tracks, ["en"], [], ocr=False) == {}
         if _ocr_ready("en"):

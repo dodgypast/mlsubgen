@@ -166,6 +166,8 @@ def describe_tracks(res: ProbeResult) -> str:
                      f"{'  default' if t.is_default else ''}{'  ' + t.title if t.title else ''}")
     for t in res.subs:
         kind = "text" if t.is_text else "bitmap (needs OCR — ignored)"
+        if not t.is_text:
+            kind = "bitmap (PGS — read by OCR)" if t.codec == "hdmv_pgs_subtitle" else f"bitmap ({t.codec} — not PGS, not read)"
         lines.append(f"   s:{t.index}  lang={t.language:<4} {t.codec:<10} {kind}"
                      f"{' (language read from the text)' if t.sniffed else ''}"
                      f"{'  forced' if t.forced else ''}{'  default' if t.is_default else ''}{'  ' + t.title if t.title else ''}")
