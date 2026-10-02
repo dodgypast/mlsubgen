@@ -105,6 +105,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
                    help="bitmap (PGS) subtitle tracks (0.4.8): auto = read them through OCR (tesseract + the language's pack) — "
                         "a bitmap track in a target language becomes that target's .srt, one in the spoken language becomes the "
                         "transcript; off = ignore them as before")
+    p.add_argument("--terms", default="auto", choices=["auto", "off"],
+                   help="terminology pass (0.5.1): auto = the film's names and recurring terms are rendered once per target and "
+                        "fed to every translation window (your --glossary still wins); off = windows decide on their own")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -361,7 +364,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 0
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr) for v, want in todo]
+                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr, terms=a.terms) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -858,7 +861,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
     target = parse_targets(a.target)[0]
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-              a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold)
+              a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms)
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
     key = asr_key_for(engines, context, a.asr)
@@ -906,7 +909,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
 
     bench_dir = Path(a.out_dir).expanduser()
     bench_dir.mkdir(parents=True, exist_ok=True)
-    tag = video.stem + (f".{int(clip[0])}-{int(clip[1])}" if clip else "") + (f".spk-{job.speakers}" if speakers_wanted(job) else "")
+    tag = video.stem + (f".{int(clip[0])}-{int(clip[1])}" if clip else "") + (f".spk-{job.speakers}" if speakers_wanted(job) else "") \
+        + (".terms" if (job.terms or "auto") != "off" and len(cues) >= config.TERMS_MIN_CUES else "")
     reference = None
     ref_texts = None
     if a.reference:
@@ -1954,6 +1958,20 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
     except ImportError:
         pass                                                                   # pillow is a dependency of the OCR path only
+    # terminology (0.5.1): candidates by script, recurrence, fragments folded into longer terms, user glossary wins
+    from . import terms as _tm
+    ja_lines = ["しんちゃん、おはよう", "しんちゃんは学校へ", "ドアを開けて", "カスカベに行く", "ミサエとヒロシ", "ミサエ！", "ヒロシは会社", "テレビを見る"]
+    hc = _tm.heuristic_candidates(ja_lines, "ja")
+    assert hc.get("ミサエ") == 2 and hc.get("ヒロシ") == 2 and hc.get("カスカベ") == 1 and "ドア" not in hc and "テレビ" not in hc, hc
+    sel = _tm.select_terms(ja_lines, "ja", hc, ["しんちゃん", "ミサエとヒロシ", "ドア"])
+    names = [t for t, _ in sel]
+    assert "しんちゃん" in names and "ミサエ" in names and "ヒロシ" in names and "カスカベ" not in names and "ドア" not in names, sel
+    en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
+    he = _tm.heuristic_candidates(en_lines, "en")
+    assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he
+    # (a name at a sentence start is not counted by the heuristic — the LLM pass is what finds those)
+    assert _tm.build_glossary({"ミサエ": "มิซาเอะ", "ヒロシ": "ฮิโรชิ"}, {"ミサエ": "มิซาเอ"}) == {"ミサエ": "มิซาเอ", "ヒロシ": "ฮิโรชิ"}
+    assert _tm._chunks(["a" * 100] * 50, 1000) and sum(len(p) for p in _tm._chunks(["a" * 100] * 50, 1000)) >= 5000
     # worker readiness helpers
     assert worker.paths_ready(["/definitely/not/here"], mounts=[]) is not None
     assert worker.paths_ready([str(Path(tempfile.gettempdir()))], mounts=[], roots=[]) is None

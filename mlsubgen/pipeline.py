@@ -42,6 +42,7 @@ class Job:
     speakers: str = "off"            # --speakers off | auto | N (0.4.0): diarize, split cues at speaker changes, hint the translator
     speaker_threshold: float | None = None
     ocr: str = "auto"                # --ocr auto | off (0.4.8): bitmap subtitle tracks read through OCR as sources / targets
+    terms: str = "auto"              # --terms auto | off (0.5.1): the film's names rendered once and fed to every window
 
     @property
     def work_file(self) -> Path:
@@ -564,10 +565,51 @@ def stage_cues(job: Job, data: dict, key: str, words: list[Word], spans: list[Sp
     return cues
 
 
+# ── stage 1e: terminology (0.5.1) ─────────────────────────────────────────────────────────────────────────
+def terms_wanted(job: Job, cues: list[Cue]) -> bool:
+    return (job.terms or "auto") != "off" and len(cues) >= config.TERMS_MIN_CUES
+
+
+def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, pool: ClientPool,
+                force_model: str | None = None) -> dict[str, str]:
+    """The glossary for this target: the film's names and recurring terms rendered once (cached per source key and
+    target), under the user's own glossary. Off, or a clip too short to have recurring names: the user's glossary."""
+    from . import terms as tm
+    from .translate import route
+    if not terms_wanted(job, cues):
+        return tm.build_glossary({}, job.glossary)
+    langs: dict[str, int] = {}
+    for c in cues:
+        langs[c.lang] = langs.get(c.lang, 0) + 1
+    src = max(langs, key=langs.get)
+    texts = [c.ja for c in cues if c.lang == src and c.ja]
+    entry = data.setdefault("terms", {}).setdefault(key, {})
+    client = pool.use(force_model or route(src, target))
+    t0 = time.time()
+    if entry.get("version") != config.TERMS_VERSION or "terms" not in entry:
+        heuristic = tm.heuristic_candidates(texts, src)
+        found = tm.llm_candidates(client, texts, src, job.genre)
+        selected = tm.select_terms(texts, src, heuristic, found)
+        entry.update({"version": config.TERMS_VERSION, "source": src, "terms": selected, "renderings": {},
+                      "model": client.tr.model, "candidates_llm": len(found), "candidates_heuristic": len(heuristic)})
+        work.save(job.work_file, data)
+    terms = [t for t, _ in entry["terms"]]
+    rendered = entry["renderings"].get(target)
+    if rendered is None:
+        rendered = tm.render_terms(client, terms, src, target, job.genre)
+        entry["renderings"][target] = rendered
+        work.save(job.work_file, data)
+    glossary = tm.build_glossary(rendered, job.glossary)
+    _log(f"[terms] {len(terms)} recurring term(s) in the {config.LANG_NAMES.get(src, src)} transcript, {len(rendered)} rendered "
+         f"for {config.LANG_NAMES.get(target, target)}" + (f" in {time.time() - t0:.0f}s" if time.time() - t0 > 1 else " (cached)")
+         + (f": {tm.summarise(entry['terms'], rendered)}" if terms else ""))
+    return glossary
+
+
 # ── stage 2: translation per target ───────────────────────────────────────────────────────────────────────
 def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str, pool: ClientPool,
                     force: bool = False, force_model: str | None = None) -> list[Cue]:
-    tkey = f"{key}|{target}"
+    tkey = f"{key}|{target}" + ("|terms" if terms_wanted(job, cues) else "")
     cached = (data.get("translations") or {}).get(tkey)
     partial = bool(cached and cached.get("partial"))
     if cached and not partial and not force:
@@ -591,7 +633,8 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
         data.setdefault("translations", {})[tkey] = {"target": target, "partial": True, "cues": [c.to_dict() for c in cs]}
         work.save(job.work_file, data)
 
-    translate_cues(fresh, None, job.glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
+    glossary = stage_terms(job, data, key, cues, target, pool, force_model)      # 0.5.1: names rendered once, up front
+    translate_cues(fresh, None, glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
                    target=target, pool=pool, force_model=force_model)
     usage = {n: cl.usage.__dict__ for n, cl in pool.clients.items()}
     data.setdefault("translations", {})[tkey] = {"target": target, "cues": [c.to_dict() for c in fresh],

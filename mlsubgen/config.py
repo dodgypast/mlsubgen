@@ -282,6 +282,13 @@ SPEAKER_MIN_CLUSTERS = 2       # … or when the diarizer found fewer speakers t
 SPEAKER_MAX_CLUSTER_RATIO = 0.25   # … or more clusters than this share of the turns (above 8): fragmentation, not speakers
 SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
 
+# ── Terminology (0.5.1): the film's names rendered once per target, fed to every translation window ─────────
+TERMS_VERSION = 1              # part of the cache: bump when the extraction or the prompts change
+TERMS_MIN_CUES = 40            # a clip shorter than this has no recurring names worth a pass
+TERMS_MIN_OCCURRENCES = 2      # a candidate must occur this often in the transcript to be a term
+TERMS_MAX = 60                 # the most frequent terms are kept; the glossary goes into every window's prompt
+TERMS_CHUNK_CHARS = 6000       # transcript text per extraction call (up to four calls, spread over a long film)
+
 # ── OCR of bitmap subtitle tracks (0.4.8) ────────────────────────────────────────────────────────────────────
 OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1,800-cue track is ~4 min on four cores)
 OCR_VERSION = 2                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
