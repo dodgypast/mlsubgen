@@ -1361,12 +1361,15 @@ def cmd_ocr(a: argparse.Namespace) -> int:
     if t is None:
         _log("no bitmap subtitle track matched — pick one with --track N:"); _log(describe_tracks(pr)); return 1
     lang = a.lang or code_for_tag(t.language) or "en"
-    ok, why = ocr.engine_available(a.engine, lang)
+    engine = a.engine if a.engine != "auto" else ocr.engine_for(lang)
+    if engine is None:
+        _log(f"[ocr] no engine reads {config.LANG_NAMES.get(lang, lang)} bitmap subtitles here (tesseract pack, or a vision model on this profile)"); return 1
+    ok, why = ocr.engine_available(engine, lang)
     if not ok:
         _log(f"[ocr] {why}"); return 1
     t0 = time.time()
-    _log(f"[ocr] s:{t.index} {t.codec} lang={t.language} → {lang} ({why}) with {a.engine}")
-    out, n, cached = ocr.ocr_track_cached(video, t.index, lang, a.engine, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
+    _log(f"[ocr] s:{t.index} {t.codec} lang={t.language} → {lang} ({why}) with {engine}")
+    out, n, cached = ocr.ocr_track_cached(video, t.index, lang, engine, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
     if a.out:
         import shutil as _sh
         dest = Path(a.out).expanduser()
@@ -1407,6 +1410,10 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
         tmp.parent.mkdir(parents=True, exist_ok=True)
         extract_track(video, rt.index, tmp, rt.codec)
         ref = read_srt(tmp); where = f"s:{rt.index} {rt.codec}"
+    if a.engine == "auto":
+        a.engine = ocr.engine_for(lang)
+        if a.engine is None:
+            _log(f"[ocr] no engine reads {config.LANG_NAMES.get(lang, lang)} bitmap subtitles here"); return 1
     ok, why = ocr.engine_available(a.engine, lang)
     if not ok:
         _log(f"[ocr] {why}"); return 1
@@ -1885,6 +1892,12 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.clean_ocr("the_name", "en") == "the_name", "an underscore inside a word stays"
     assert _ocr.clean_ocr("iIn Nazi-occupied France", "en") == "In Nazi-occupied France", "an italic I read twice"
     assert _ocr.clean_ocr("ท\u0e4d\u0e32ให้", "th") == "ทำให้", "Thai sara am as one character"
+    assert _ocr.clean_ocr("什么cdots那是我表哥", "zh") == "什么…那是我表哥" and _ocr.clean_ocr(r"wait\ldots", "en") == "wait…"
+    assert "th" in _ocr.VLM_SCRIPTS and "en" not in _ocr.VLM_SCRIPTS and "el" not in _ocr.VLM_SCRIPTS
+    _prof = config.PROFILE
+    config.apply_profile("8gb")
+    assert _ocr.engine_for("th") is None, "the 8gb profile's vision model does not read Thai well enough"
+    config.apply_profile(_prof)
     # a truncated run-length fragment decodes what it can instead of raising
     assert len(_ocr._rle_decode(bytes([0, 0x84]), 4, 1)) == 4
     assert _ocr.VLM_PROMPT.format(language="Thai").startswith("This image is one subtitle")
@@ -1990,15 +2003,16 @@ def main(argv: list[str] | None = None) -> int:
     oc.add_argument("video")
     oc.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N (see `mlsubgen tracks`)")
     oc.add_argument("--lang", default=None, help="the OCR language (default: the track's tag)")
-    oc.add_argument("--engine", default="tesseract", choices=["tesseract", "vlm"],
-                    help="tesseract (the binary + its language pack) or vlm (a vision model through Ollama: config.OCR_VLM_MODEL)")
+    oc.add_argument("--engine", default="auto", choices=["auto", "tesseract", "vlm"],
+                    help="auto = the engine measured best for the script (tesseract for alphabets, the profile's vision model "
+                         "for CJK and stacked scripts); tesseract = the binary + its language pack; vlm = a vision model through Ollama")
     oc.add_argument("--out", default=None, help="write the .srt here instead of the cache")
     oc.set_defaults(fn=cmd_ocr)
     ob = sub.add_parser("ocrbench", help="score the OCR of a bitmap track against a text track of the same film")
     ob.add_argument("video")
     ob.add_argument("--track", type=int, default=None, metavar="N", help="the bitmap track s:N")
     ob.add_argument("--lang", default=None)
-    ob.add_argument("--engine", default="tesseract", choices=["tesseract", "vlm"])
+    ob.add_argument("--engine", default="auto", choices=["auto", "tesseract", "vlm"])
     ob.add_argument("--prep", default=None, choices=list(config.OCR_PREP_MODES) if hasattr(config, "OCR_PREP_MODES") else ["binary", "fill", "gray", "fill3x"],
                     help="image preparation for tesseract (default: config OCR_PREP)")
     ob.add_argument("--reference", default=None, help="a .srt to compare with (default: the film's text track in that language)")

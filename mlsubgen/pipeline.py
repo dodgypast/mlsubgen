@@ -107,7 +107,8 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         write_srt(out, got)
         satisfied.append(t)
         _log(f"[subs] {config.LANG_NAMES.get(t, t)} subtitles are a bitmap track (s:{track.index} {track.codec}"
-             f"{', ' + track.title if track.title else ''}) — OCR'd{' (cached)' if cached else ''} into {out.name}: {len(got)} cues")
+             f"{', ' + track.title if track.title else ''}) — OCR'd with {ocr.engine_for(t)}{' (cached)' if cached else ''} "
+             f"into {out.name}: {len(got)} cues")
     remaining = [t for t in targets if t not in satisfied]
     if source is None and remaining and use_ocr:
         _, source = plan_sources(job.video, pr.subs, remaining, mode, spoken, ocr=True)      # a bitmap source, if any
@@ -129,7 +130,7 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         path, n, cached = ocr.ocr_track_cached(job.video, src.index, lang, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
         cues = cues_from_track(path, lang)
         key = f"ocr|s:{src.index}|{src.codec}|v{config.OCR_VERSION}|{lang}"
-        where = f"bitmap s:{src.index} {src.codec}{', ' + src.title if src.title else ''}, OCR'd{' (cached)' if cached else ''}"
+        where = f"bitmap s:{src.index} {src.codec}{', ' + src.title if src.title else ''}, OCR'd with {ocr.engine_for(lang)}{' (cached)' if cached else ''}"
         origin = {"ocr_track": src.index, "codec": src.codec, "language": lang, "raw_cues": n, "ocr_version": config.OCR_VERSION}
     else:
         tmp = job.tmp_dir / (job.work_file.stem + f".{lang}.srt")

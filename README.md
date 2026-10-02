@@ -151,12 +151,20 @@ track is read through OCR (`--ocr auto`, the default; `--ocr off` restores the o
   the other targets are translated from — human subtitles with OCR noise still beat a transcription.
 
 mlsubgen decodes the PGS stream itself (compositions, palettes, run-length objects) and hands each subtitle image
-to the OCR engine. The engine is the `tesseract` binary with the language's pack (`tesseract-data-<lang>` on Arch,
-`tesseract-ocr-<lang>` on Debian; the Docker image ships the common ones); a track whose language has no pack here
-is left alone, as before. Results are cached beside the work files, so a track is OCR'd once. `mlsubgen ocr VIDEO
---track N` runs it by hand; `mlsubgen ocrbench VIDEO` scores the OCR against a text track of the same film —
-measured 2026-10-02 on a 1080p Blu-ray's English PGS track against its own SRT: chrF 95.8 before the cleaning
-rules for the two systematic habits found (tight dialogue dashes, a capital I read as a pipe).
+to the engine measured best for the script:
+
+| script | engine | measured (exact cues / chrF) |
+|---|---|---|
+| Latin, Greek, Cyrillic | `tesseract` with the language's pack (`tesseract-data-<lang>` on Arch, `tesseract-ocr-<lang>` on Debian; the Docker image ships 19) — CPU, four images at a time | English Blu-ray, 1,800 cues: **95 % / 99.4** |
+| Thai, Chinese, Japanese, Korean, and scripts with stacked marks (Lao, Khmer, Burmese, Indic, Arabic, Hebrew) | the hardware profile's vision model through Ollama (`gemma4:31b` on `full`, `12b` on `12gb`) — one image a second on the GPU | Thai: 31B **77 % / 93.7**, 12B 65 % / 89.3; Chinese Simplified: 31B **79 % / 90.0**. tesseract on the same: Thai 50 / 71, Chinese 41 / 78 |
+| those scripts on the `8gb` profile | none — the E4B read Thai at 18 % / 66.5, not enough to translate from; the track is left alone and the audio transcribed, as before 0.4.8 | |
+
+Results are cached beside the work files, so a track is OCR'd once. `mlsubgen ocr VIDEO --track N` runs it by
+hand (`--engine` overrides the choice); `mlsubgen ocrbench VIDEO` scores the OCR against a text track of the same
+film, which is how the numbers above were taken (2026-10-02, a web release whose text tracks come from the same
+source as its bitmaps; "Hybrid" releases pair bitmaps and text from different translations and cannot be used).
+Systematic habits found this way are corrected after the engine: tight dialogue dashes, a capital I read as a pipe
+or an underscore for a dash, Thai *sara am* as two code points, an ellipsis written as LaTeX.
 
 ### Speakers
 

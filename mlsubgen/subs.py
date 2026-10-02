@@ -78,10 +78,11 @@ def pick_bitmap(subs: list[SubTrack], lang: str) -> SubTrack | None:
 
 
 def ocr_ready(lang: str) -> bool:
-    """Can a bitmap track in `lang` be read here? (the OCR engine and its language pack)"""
+    """Can a bitmap track in `lang` be read here well enough to use? (ocr.engine_for: tesseract with the language's
+    pack for alphabets; the profile's vision model for CJK and stacked scripts, not on the 8gb profile)"""
     try:
-        from .ocr import tesseract_available
-        return tesseract_available(lang)[0]
+        from .ocr import engine_for
+        return engine_for(lang) is not None
     except Exception:
         return False
 

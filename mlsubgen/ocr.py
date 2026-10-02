@@ -342,6 +342,7 @@ def clean_ocr(text: str, lang: str) -> str:
     sara am as nikhahit + sara aa (two code points); the one-character form is what every text uses."""
     if lang == "th":
         text = text.replace("\u0e4d\u0e32", "\u0e33")
+    text = _re.sub(r"\\?[cl]dots", "…", text)             # a vision model writing the ellipsis as LaTeX ("什么cdots那是")
     text = _DASH_START.sub("- ", text)
     text = _DASH_MID.sub("- ", text)
     text = _PIPE_I.sub("I", text)
@@ -391,6 +392,28 @@ def vlm_png(bm: Bitmap) -> bytes:
     buf = io.BytesIO()
     g.save(buf, format="PNG")
     return buf.getvalue()
+
+
+# Which engine reads which script — measured 2026-10-02 on No Hard Feelings (web release, text tracks from the same
+# source as the bitmaps; exact-match share / chrF on 150–300 cues) and Definitely, Maybe (Blu-ray, 1,800 cues):
+#   Latin (English)         tesseract  95 % / 99.4          gemma4 31B not needed
+#   Thai                    tesseract  50 % / 71 (line by line; 13 % as a block)
+#                           gemma4:31b 77 % / 93.7   gemma4:12b 65 % / 89.3   gemma4:e4b 18 % / 66.5
+#   Chinese (Simplified)    tesseract  41 % / 77.6          gemma4:31b 79 % / 90.0
+#   Chinese (Traditional)   tesseract  37 % / 64.5
+# So: Latin-script (and Greek/Cyrillic, alphabets tesseract handles like Latin) → tesseract; CJK and the scripts
+# with stacked marks → the profile's vision model, except the 8gb profile's E4B, which does not read them well
+# enough to translate from — those tracks are left alone there and the audio is transcribed, as before 0.4.8.
+VLM_SCRIPTS = {"ja", "zh", "yue", "ko", "th", "lo", "km", "my", "hi", "bn", "ta", "ar", "fa", "he"}
+
+
+def engine_for(lang: str) -> str | None:
+    """The engine that reads bitmap subtitles in `lang` on this machine, or None when none can."""
+    if lang in VLM_SCRIPTS:
+        if config.PROFILE == "8gb":
+            return None
+        return "vlm" if engine_available("vlm", lang)[0] else None
+    return "tesseract" if tesseract_available(lang)[0] else None
 
 
 def engine_available(engine: str, lang: str) -> tuple[bool, str]:
@@ -473,9 +496,13 @@ def cached_srt_for(video: Path, s_index: int, engine: str = "tesseract") -> Path
     return config.WORK_DIR / "ocr" / f"{stem}.s{s_index}.{engine}.v{config.OCR_VERSION}.srt"
 
 
-def ocr_track_cached(video: Path, s_index: int, lang: str, engine: str = "tesseract", progress=None) -> tuple[Path, int, bool]:
+def ocr_track_cached(video: Path, s_index: int, lang: str, engine: str | None = None, progress=None) -> tuple[Path, int, bool]:
     """OCR a track once: (srt path, cue count, was it cached). The cache is keyed by file, track, engine and
-    OCR_VERSION; the planner and the bench both go through here."""
+    OCR_VERSION; the planner and the bench both go through here. `engine` None = the one measured best for the
+    script (engine_for)."""
+    engine = engine or engine_for(lang)
+    if engine is None:
+        raise RuntimeError(f"no OCR engine can read {config.LANG_NAMES.get(lang, lang)} bitmap subtitles here")
     out = cached_srt_for(video, s_index, engine)
     if out.is_file() and out.stat().st_size > 0:
         n = sum(1 for l in out.read_text(encoding="utf-8", errors="replace").splitlines() if "-->" in l)
