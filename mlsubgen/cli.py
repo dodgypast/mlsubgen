@@ -1456,8 +1456,9 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     exact = sum(1 for c, r in pairs if norm(c.text) == norm(r.text))
     # the content score: chrF over everything each side says within the same minute of the film, so a cue split
     # on one side and merged on the other is not an error — only the characters are judged
-    cjk = _re.compile(r"[\s、。！？!?…「」『』・，,.\-–—]")
-    content = lambda s: cjk.sub("", norm(s)) if lang in ("ja", "zh", "yue", "th", "ko") else norm(s)
+    cjk = _re.compile(r"[\s、。！？!?…「」『』・，,.\-–—－]")
+    furigana = _re.compile(r"[\(（][ぁ-ゖー]+[\)）]")        # a transcript's inline readings, 厄介(やっかい): not on the disc
+    content = lambda s: cjk.sub("", furigana.sub("", norm(s)) if lang == "ja" else norm(s)) if lang in ("ja", "zh", "yue", "th", "ko") else norm(s)
     span_end = max([c.end for c in cues] + [r.end for r in ref] + [0.0])
     win_h, win_r = [], []
     for w0 in range(0, int(span_end) + 60, 60):

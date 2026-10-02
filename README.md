@@ -156,13 +156,17 @@ to the engine measured best for the script:
 | script | engine | measured (exact cues / chrF) |
 |---|---|---|
 | Latin, Greek, Cyrillic | `tesseract` with the language's pack (`tesseract-data-<lang>` on Arch, `tesseract-ocr-<lang>` on Debian; the Docker image ships 19) — CPU, four images at a time | English Blu-ray, 1,800 cues: **95 % / 99.4** |
-| Thai, Chinese, Japanese, Korean, and scripts with stacked marks (Lao, Khmer, Burmese, Indic, Arabic, Hebrew) | the hardware profile's vision model through Ollama (`gemma4:31b` on `full`, `12b` on `12gb`) — one image a second on the GPU | Thai: 31B **77 % / 93.7**, 12B 65 % / 89.3; Chinese Simplified: 31B **79 % / 90.0**. tesseract on the same: Thai 50 / 71, Chinese 41 / 78 |
+| Thai, Chinese, Japanese, Korean, and scripts with stacked marks (Lao, Khmer, Burmese, Indic, Arabic, Hebrew) | the hardware profile's vision model through Ollama (`gemma4:31b` on `full`, `12b` on `12gb`) — one image a second on the GPU; unloaded before the ASR engines load | Thai: 31B **77 % / 93.7**, 12B 65 % / 89.3; Chinese Simplified: 31B **79 % / 90.0**; Japanese (a Blu-ray SDH track against another distributor's SDH transcript, descriptions and labels stripped): 31B 51 % identical cues / chrF 78 — the gap is the disc keeping a line on screen while adding the next, interjections the other transcript lacks, and furigana the model correctly left out; paired lines match to the character. tesseract on the same: Thai 50 / 71, Chinese 41 / 78 |
 | those scripts on the `8gb` profile | none — the E4B read Thai at 18 % / 66.5, not enough to translate from; the track is left alone and the audio transcribed, as before 0.4.8 | |
 
 Results are cached beside the work files, so a track is OCR'd once. `mlsubgen ocr VIDEO --track N` runs it by
 hand (`--engine` overrides the choice); `mlsubgen ocrbench VIDEO` scores the OCR against a text track of the same
 film, which is how the numbers above were taken (2026-10-02, a web release whose text tracks come from the same
-source as its bitmaps; "Hybrid" releases pair bitmaps and text from different translations and cannot be used).
+source as its bitmaps; "Hybrid" releases pair bitmaps and text from different translations and cannot be used,
+and a streaming service's SRT muxed beside a Blu-ray's bitmaps may be out of sync with the disc's cut — one
+scored 1 % against a track that scored 51 % against another transcript). SDH tracks are compared with
+descriptions and speaker labels stripped, and a per-minute content score ignores cue boundaries, because
+distributors cut the same dialogue into cues differently.
 Systematic habits found this way are corrected after the engine: tight dialogue dashes, a capital I read as a pipe
 or an underscore for a dash, Thai *sara am* as two code points, an ellipsis written as LaTeX.
 
