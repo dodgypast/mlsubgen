@@ -1791,6 +1791,13 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     # engine can read its language here, and never with --ocr off
     from .subs import bitmap_targets as _btg, ocr_ready as _ocr_ready, pick_bitmap as _pb, plan_sources as _ps
     assert _pb(tracks, "ja").index == 5 and _pb(tracks, "en") is None
+    # SDH cleaning (0.4.9): descriptions go, speaker labels go, dialogue stays
+    from .subs import clean_sdh as _csdh, is_sdh as _issdh
+    assert _csdh("（ドアが閉まる）") == "" and _csdh("[door closes]\nWhere are you?") == "Where are you?"
+    assert _csdh("♪ ♪") == "" and _csdh("♪ [upbeat music] ♪") == "" and _csdh("MAN: Over here.") == "Over here."
+    assert _csdh("（男）こんにちは") == "こんにちは" and _csdh("ジョン：行こう") == "行こう" and _csdh("18:30に会おう") == "18:30に会おう"
+    assert _csdh("Wait... (sighs) I'm fine.") == "Wait... (sighs) I'm fine.", "a description inside a spoken line stays"
+    assert _issdh(_ST(0, 2, "jpn", "Japanese SDH [JPNBD]", "hdmv_pgs_subtitle", False, False, False)) and not _issdh(tracks[0])
     with tempfile.TemporaryDirectory() as d:
         vid = Path(d) / "film.mkv"; vid.touch()
         bm_tracks = [_ST(0, 2, "eng", "", "hdmv_pgs_subtitle", False, False, False), _ST(1, 3, "eng", "", "hdmv_pgs_subtitle", False, True, False)]
@@ -1900,7 +1907,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     config.apply_profile(_prof)
     # a truncated run-length fragment decodes what it can instead of raising
     assert len(_ocr._rle_decode(bytes([0, 0x84]), 4, 1)) == 4
-    assert _ocr.VLM_PROMPT.format(language="Thai").startswith("This image is one subtitle")
+    assert _ocr.VLM_PROMPT.format(language="Thai", extra="").startswith("This image is one subtitle")
+    assert "furigana" in _ocr.VLM_PROMPT.format(language="Japanese", extra=_ocr.VLM_EXTRA["ja"])
     try:
         import PIL  # noqa: F401
         from PIL import Image as _Img

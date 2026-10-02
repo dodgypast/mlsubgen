@@ -17,7 +17,7 @@ from .clean import filter_cues
 from .probe import ProbeResult, describe_tracks, probe
 from .segment import Cue, build_cues, normalise_timing
 from .srt import read_srt, typeset, write_srt
-from .subs import MIN_CUES, bitmap_targets, code_for_tag, cues_from_track, extract_track, pick, plan_sources
+from .subs import MIN_CUES, bitmap_targets, code_for_tag, cues_from_track, extract_track, is_sdh, pick, plan_sources
 from .translate import ClientPool, translate_cues
 from .vad import Span, speech_spans
 
@@ -128,14 +128,14 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         origin = {"sidecar": str(src), "language": lang}
     elif not src.is_text:
         path, n, cached = ocr.ocr_track_cached(job.video, src.index, lang, progress=lambda d, k: _log(f"[ocr] {d}/{k}"))
-        cues = cues_from_track(path, lang)
+        cues = cues_from_track(path, lang, sdh=is_sdh(src))
         key = f"ocr|s:{src.index}|{src.codec}|v{config.OCR_VERSION}|{lang}"
         where = f"bitmap s:{src.index} {src.codec}{', ' + src.title if src.title else ''}, OCR'd with {ocr.engine_for(lang)}{' (cached)' if cached else ''}"
         origin = {"ocr_track": src.index, "codec": src.codec, "language": lang, "raw_cues": n, "ocr_version": config.OCR_VERSION}
     else:
         tmp = job.tmp_dir / (job.work_file.stem + f".{lang}.srt")
         n = extract_track(job.video, src.index, tmp, src.codec)
-        cues = cues_from_track(tmp, lang)
+        cues = cues_from_track(tmp, lang, sdh=is_sdh(src))
         tmp.unlink(missing_ok=True)
         key = f"embedded|s:{src.index}|{src.codec}|{lang}"
         where = f"embedded s:{src.index} {src.codec}{', ' + src.title if src.title else ''}"

@@ -292,13 +292,39 @@ def clean_ja_line(line: str) -> str:
     return _SPEAKER.sub("", line).strip()
 
 
-def cues_from_track(srt_path: Path, lang: str = "ja") -> list[Cue]:
+# SDH (hearing-impaired) tracks describe sounds and name speakers; none of that is dialogue. Cues that are entirely
+# a description — (door closes), ［音楽］, 〔笑い声〕, ♪ … ♪ — are dropped; a leading speaker label — "MAN:", "（男）",
+# "ジョン：" — is stripped (0.4.9, 2026-10-02; a Japanese SDH PGS track was the only Japanese track of a disc).
+_SDH_WHOLE = re.compile(r"^\s*(?:[\[\(（［〔【][^\]\)）］〕】]*[\]\)）］〕】]\s*)+$")
+_SDH_MUSIC = re.compile(r"^\s*[♪♫♬～〜\-–—\s]*(?:[\[\(（［][^\]\)）］]*[\]\)）］])?[♪♫♬～〜\-–—\s]*$")
+_SDH_LABEL = re.compile(r"^\s*(?:[\(（][^\)）]{1,12}[\)）]\s*|[A-ZÀ-Ý][A-ZÀ-Ý .'\-]{1,24}:\s+|[^\s：:\d]{1,10}[：:]\s*(?=\S))")   # not "18:30"
+
+
+def clean_sdh(text: str) -> str:
+    """The dialogue of an SDH cue, or "" when the cue was only a description."""
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or _SDH_WHOLE.match(s) or _SDH_MUSIC.match(s):
+            continue
+        s = _SDH_LABEL.sub("", s, count=1).strip()
+        if s:
+            out.append(s)
+    return "\n".join(out)
+
+
+def is_sdh(track) -> bool:
+    return bool(re.search(r"sdh|hearing|\bcc\b|closed caption", getattr(track, "title", "") or "", re.I))
+
+
+def cues_from_track(srt_path: Path, lang: str = "ja", sdh: bool = False) -> list[Cue]:
     """Subtitle file → source cues with the track's own timings. Display lines are joined without spaces for
     Japanese/Chinese/Thai and with spaces otherwise; CC speaker labels and sound-effect-only lines go."""
     joiner = "" if lang in ("ja", "zh", "yue", "th", "km", "lo", "my") else " "    # scripts without word spaces
     cues: list[Cue] = []
     for c in read_srt(srt_path):
-        parts = [clean_ja_line(line) for line in c.text.splitlines()]
+        body = clean_sdh(c.text) if sdh else c.text
+        parts = [clean_ja_line(line) for line in body.splitlines()]
         text = joiner.join(p for p in parts if p).strip()
         if text and c.end > c.start:
             cues.append(Cue(len(cues), c.start, c.end, text, lang=lang))

@@ -355,7 +355,10 @@ def clean_ocr(text: str, lang: str) -> str:
 
 VLM_PROMPT = ("This image is one subtitle from a film, in {language}. Transcribe its text exactly as written: every "
               "character, line breaks as line breaks, nothing added, nothing explained, no quotation marks around it. "
-              "If the image holds no text, answer with an empty line.")
+              "If the image holds no text, answer with an empty line.{extra}")
+VLM_EXTRA = {"ja": " Ignore any small furigana (ruby readings) printed above the kanji: transcribe the main text only.",
+             "zh": " Keep the characters in the script shown (simplified or traditional); do not convert them.",
+             "yue": " Keep the characters in the script shown (simplified or traditional); do not convert them."}
 
 
 def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = None) -> str:
@@ -368,7 +371,7 @@ def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = N
     url = (url or config.LLM_URL).rstrip("/") + "/api/generate"
     # think: false — Gemma 4 otherwise spends its tokens reasoning and returns an empty response (2026-10-02: 138 of
     # 150 Thai images came back empty at eight seconds each; the translator presets switch thinking off the same way)
-    body = {"model": model, "prompt": VLM_PROMPT.format(language=config.LANG_NAMES.get(lang, lang)),
+    body = {"model": model, "prompt": VLM_PROMPT.format(language=config.LANG_NAMES.get(lang, lang), extra=VLM_EXTRA.get(lang, "")),
             "images": [base64.b64encode(png).decode("ascii")], "stream": False, "think": False,
             "options": {"temperature": 0, "num_predict": 200}, "keep_alive": "10m"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
