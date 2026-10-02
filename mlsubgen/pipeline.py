@@ -481,7 +481,9 @@ def cue_key_for(job: Job, key: str) -> str:
     if not speakers_wanted(job):
         return key
     thr = job.speaker_threshold or config.SPEAKER_THRESHOLD
-    return f"{key}|spk:{job.speakers}" + (f":{thr}" if job.speakers == "auto" else "")
+    # the embedding model is part of it too (2026-10-02: a bench meant to show CAM++'s labels reused the cues of the
+    # previous model's run because the key named only the mode)
+    return f"{key}|spk:{job.speakers}" + (f":{thr}" if job.speakers == "auto" else "") + f":{config.SPEAKER_EMBEDDING_FILE[:-5]}"
 
 
 def stage_cues(job: Job, data: dict, key: str, words: list[Word], spans: list[Span], audio=None) -> list[Cue]:
