@@ -383,6 +383,20 @@ def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = N
     return "\n".join(l.strip() for l in text.splitlines() if l.strip())
 
 
+def vlm_unload(model: str | None = None, url: str | None = None) -> None:
+    """Take the vision model off the card. The OCR stage runs right before the ASR engines load, and the 31B's
+    19 GB left resident made faster-whisper fail with CUDA out of memory (2026-10-02)."""
+    import json
+    import urllib.request
+    body = {"model": model or config.OCR_VLM_MODEL, "keep_alive": 0}
+    req = urllib.request.Request((url or config.LLM_URL).rstrip("/") + "/api/generate", data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+    except Exception:                                                # noqa: BLE001 — best effort
+        pass
+
+
 def vlm_png(bm: Bitmap) -> bytes:
     """What a vision model sees: the subtitle as it is on screen (composited on a dark background, 2×) — a VLM
     reads styled text better than a binarised one."""
@@ -478,6 +492,7 @@ def ocr_track_images(bitmaps: list[Bitmap], lang: str, engine: str = "tesseract"
             done += 1
             if progress and done % 50 == 0:
                 progress(done, len(bitmaps))
+        vlm_unload()                                                  # the card is needed next by the ASR engines
     return [OcrCue(bm.start, bm.end, t) for bm, t in zip(bitmaps, texts) if t]
 
 

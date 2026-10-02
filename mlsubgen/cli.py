@@ -1434,7 +1434,13 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     if a.prep:
         where += f" · prep {a.prep}"
     import re as _re
-    norm = lambda s: _re.sub(r"\s+", " ", _re.sub(r"</?i>|\{[^}]*\}", "", s)).strip().lower()
+    from .subs import clean_sdh, is_sdh
+    # SDH on either side: descriptions and speaker labels are not what the OCR is being measured on (2026-10-02: a
+    # Japanese SDH SRT packed two disc cues into one with speaker labels in front, and the per-cue score read 30 %)
+    sdh = is_sdh(bm) or (not a.reference and is_sdh(rt))
+    norm = lambda s: _re.sub(r"\s+", " ", _re.sub(r"</?i>|\{[^}]*\}", "", clean_sdh(s) if sdh else s)).strip().lower()
+    cues = [c for c in cues if norm(c.text)]
+    ref = [r for r in ref if norm(r.text)]
     pairs = []
     unmatched = 0
     for c in cues:
@@ -1448,10 +1454,24 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
         pairs.append((c, best))
     score = chrf([norm(c.text) for c, _ in pairs], [norm(r.text) for _, r in pairs]) if pairs else None
     exact = sum(1 for c, r in pairs if norm(c.text) == norm(r.text))
+    # the content score: chrF over everything each side says within the same minute of the film, so a cue split
+    # on one side and merged on the other is not an error — only the characters are judged
+    cjk = _re.compile(r"[\s、。！？!?…「」『』・，,.\-–—]")
+    content = lambda s: cjk.sub("", norm(s)) if lang in ("ja", "zh", "yue", "th", "ko") else norm(s)
+    span_end = max([c.end for c in cues] + [r.end for r in ref] + [0.0])
+    win_h, win_r = [], []
+    for w0 in range(0, int(span_end) + 60, 60):
+        h = "".join(content(c.text) for c in cues if w0 <= c.start < w0 + 60)
+        r = "".join(content(r.text) for r in ref if w0 <= r.start < w0 + 60)
+        if h or r:
+            win_h.append(h); win_r.append(r)
+    content_score = chrf(win_h, win_r) if win_h else None
     print(f"\nocrbench  {video.name}")
-    print(f"  bitmap s:{bm.index} ({bm.language}) with {a.engine} vs text {where} · {len(cues)} OCR cues, {len(ref)} reference cues · {elapsed:.0f}s")
+    print(f"  bitmap s:{bm.index} ({bm.language}) with {a.engine} vs text {where} · {len(cues)} OCR cues, {len(ref)} reference cues · {elapsed:.0f}s"
+          + ("   (SDH: descriptions and speaker labels stripped on both sides)" if sdh else ""))
     print(f"  matched {len(pairs)} ({unmatched} OCR cues overlap no reference cue)   exact {exact} ({100 * exact / max(1, len(pairs)):.0f}%)"
-          + (f"   chrF {score:.1f}" if score is not None else ""))
+          + (f"   chrF {score:.1f}" if score is not None else "")
+          + (f"   content chrF (per minute, cue boundaries ignored) {content_score:.1f}" if content_score is not None else ""))
     worst = sorted(pairs, key=lambda p: -abs(len(norm(p[0].text)) - len(norm(p[1].text))))[:a.show]
     if worst:
         print("  worst length mismatches (OCR | reference):")
