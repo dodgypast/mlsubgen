@@ -115,17 +115,21 @@ TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
 # The smaller translators are weaker, especially for Japanese → English — `mlsubgen bench` shows by how much.
 PROFILES = {
     "full": dict(min_vram_gb=20.0, routes={("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}, default="qwen3.8",
-                 whisper_compute="float16", asr_sequential=False),
+                 whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat"),
     "12gb": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-12b"}, default="gemma4-12b",
-                 whisper_compute="int8_float16", asr_sequential=False),
+                 whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:12b-it-qat"),
     "8gb": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
-                whisper_compute="int8_float16", asr_sequential=True),
+                whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:e4b-it-qat"),
 }
 PROFILE = "full"                    # the active profile (set by apply_profile at import, below)
 DEFAULT_TRANSLATOR = "qwen3.8"      # the preset that reconciles the two ASR transcripts and stands in for a missing route
 WHISPER_COMPUTE = "float16"         # faster-whisper compute type (int8_float16 halves its memory)
 ASR_SEQUENTIAL = False              # True: never hold both ASR engines at once (reload per file instead)
 VRAM_GB: float | None = None        # what was detected
+# the vision model that reads bitmap subtitles when --engine vlm is asked for (0.4.8): the profile's Gemma 4 — the
+# same model the profile translates with, so it costs no extra card space; MLSUBGEN_OCR_VLM overrides. The smaller
+# ones read less well: measure with `mlsubgen ocrbench … --engine vlm` before relying on one
+OCR_VLM_MODEL = os.environ.get("MLSUBGEN_OCR_VLM", "gemma4:31b-it-qat")
 
 
 def detect_vram_gb() -> float | None:
@@ -160,7 +164,7 @@ def pick_profile(name: str | None, vram_gb: float | None) -> str:
 def apply_profile(name: str | None = None) -> str:
     """Make `name` (or MLSUBGEN_PROFILE / auto-detection) the active profile: routes, default translator, whisper
     compute type, sequential ASR. Mutates the module's values in place, so every `config.X` reader sees it."""
-    global PROFILE, DEFAULT_TRANSLATOR, WHISPER_COMPUTE, ASR_SEQUENTIAL, VRAM_GB
+    global PROFILE, DEFAULT_TRANSLATOR, WHISPER_COMPUTE, ASR_SEQUENTIAL, VRAM_GB, OCR_VLM_MODEL
     want = name or os.environ.get("MLSUBGEN_PROFILE") or "auto"
     if want == "auto" and VRAM_GB is None:
         VRAM_GB = detect_vram_gb()
@@ -171,6 +175,8 @@ def apply_profile(name: str | None = None) -> str:
     DEFAULT_TRANSLATOR = p["default"]
     WHISPER_COMPUTE = p["whisper_compute"]
     ASR_SEQUENTIAL = p["asr_sequential"]
+    if not os.environ.get("MLSUBGEN_OCR_VLM"):
+        OCR_VLM_MODEL = p["vlm"]
     return PROFILE
 
 
@@ -281,7 +287,7 @@ OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1
 OCR_VERSION = 2                # part of the OCR cache name: bump when the decoding, cleaning or engine changes
                                # (1 → 2: underscore-for-dash and bare-l-for-I rules, from the full-track measurement)
 OCR_PREP = os.environ.get("MLSUBGEN_OCR_PREP", "binary")   # how the subtitle image is prepared for tesseract: binary | fill | gray | fill3x
-OCR_VLM_MODEL = os.environ.get("MLSUBGEN_OCR_VLM", "gemma4:31b-it-qat")   # the vision model for --engine vlm (needs `vision` in Ollama)
+# OCR_VLM_MODEL (the vision model for --engine vlm) is set per hardware profile by apply_profile(), above
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────
 VAD_THRESHOLD = 0.5

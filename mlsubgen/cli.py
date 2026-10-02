@@ -1516,8 +1516,10 @@ def cmd_selftest(a: argparse.Namespace) -> int:
                for p in config.PROFILES), "every profile's presets must exist"
     config.apply_profile("8gb")
     assert config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "int8_float16" and config.DEFAULT_TRANSLATOR == "gemma4-e4b"
+    assert os.environ.get("MLSUBGEN_OCR_VLM") or config.OCR_VLM_MODEL == "gemma4:e4b-it-qat", "the vision model follows the profile"
     config.apply_profile("full")
     assert not config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "float16" and config.TRANSLATE_ROUTES[("ja", "en")] == "qwen3.8"
+    assert os.environ.get("MLSUBGEN_OCR_VLM") or config.OCR_VLM_MODEL == "gemma4:31b-it-qat"
 
     # cues from words: sentence end, gap split, overflow
     words = [Word("今日は", 0.0, 0.4), Word("いい", 0.45, 0.6), Word("天気", 0.65, 0.9), Word("ですね。", 0.95, 1.3),
