@@ -485,7 +485,9 @@ def cmd_run(a: argparse.Namespace) -> int:
                             job.targets = [t for t in job.targets if t not in done_targets]
                             if not job.targets:
                                 _log("[subs] nothing to write: every target is already embedded")
-                                cleanup(job, work_file=True)
+                                # the work file goes when nothing was made here — but an OCR'd target IS something made
+                                # here, and its record (track, engine, gate) is what `why` answers from (0.5.0.8)
+                                cleanup(job, work_file=not (work.load(job.work_file).get("ocr_targets") if job.work_file.is_file() else False))
                                 continue
                         if key:
                             keys[job.video] = key                 # cues are in the work file; stage 2 translates them
