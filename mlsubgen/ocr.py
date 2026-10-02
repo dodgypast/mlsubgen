@@ -532,8 +532,19 @@ def assess(cues: list[OcrCue], lang: str) -> tuple[bool, dict, str]:
     replacement = chars.count("\ufffd") / max(1, len(chars))
     repeat = max(Counter(texts).values()) / n
     prose = sum(1 for t in texts if _PROSE.match(t)) / n
+    # junk lines (0.5.0.5): tesseract's Thai salad passed the checks above — its noise is Thai digits and letters, in
+    # script and alphanumeric — but it arrives as extra lines that are mostly digits and symbols ("4ส4๐ '" beside a
+    # real line), and dialogue almost never has a line like that
+    def junk_line(line: str) -> bool:
+        body = [ch for ch in line if not ch.isspace()]
+        if len(body) < 2:
+            return False
+        bad = sum(1 for ch in body if ch.isdigit() or not (ch.isalnum() or ch in _COMMON_PUNCT or
+                                                              0x300 <= ord(ch) <= 0x36F or 0xE31 <= ord(ch) <= 0xE4E or 0x3099 <= ord(ch) <= 0x309A))
+        return bad / len(body) >= 0.4
+    junk = sum(1 for t in texts if any(junk_line(l) for l in t.splitlines())) / n
     m = {"cues": n, "script_match": round(script_match, 3), "symbol_share": round(symbol_share, 3),
-         "replacement": round(replacement, 4), "repeat": round(repeat, 3), "prose": round(prose, 3)}
+         "replacement": round(replacement, 4), "repeat": round(repeat, 3), "prose": round(prose, 3), "junk_lines": round(junk, 3)}
     if script_match < config.OCR_GATE_SCRIPT:
         return False, m, f"{100 * (1 - script_match):.0f}% of cues are not in the {config.LANG_NAMES.get(lang, lang)} script"
     if symbol_share > config.OCR_GATE_SYMBOLS:
@@ -544,6 +555,8 @@ def assess(cues: list[OcrCue], lang: str) -> tuple[bool, dict, str]:
         return False, m, f"one line repeated across {100 * repeat:.0f}% of cues"
     if prose > config.OCR_GATE_PROSE:
         return False, m, f"{100 * prose:.0f}% of cues describe the image instead of transcribing it"
+    if junk > config.OCR_GATE_JUNK:
+        return False, m, f"{100 * junk:.0f}% of cues carry a line of digits and symbols"
     return True, m, "ok"
 
 

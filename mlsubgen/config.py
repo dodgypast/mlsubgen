@@ -303,6 +303,7 @@ OCR_GATE_SYMBOLS = 0.12        # at most this share of characters that are symbo
 OCR_GATE_REPLACEMENT = 0.002   # at most this share of replacement characters (U+FFFD)
 OCR_GATE_REPEAT = 0.2          # no single line on more than this share of cues
 OCR_GATE_PROSE = 0.02          # at most this share of cues that describe the image ("The text says…")
+OCR_GATE_JUNK = 0.15           # at most this share of cues carrying a line that is mostly digits and symbols (in-script salad)
 # OCR_VLM_MODEL (the vision model for --engine vlm) is set per hardware profile by apply_profile(), above
 
 # ── VAD / chunking ───────────────────────────────────────────────────────────────────────────────────────

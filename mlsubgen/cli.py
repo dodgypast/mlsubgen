@@ -1945,6 +1945,13 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     prose = good_en[:11] + [_OC(20, 21, "The text says: hello")]
     ok, m, why = _ocr.assess(prose, "en")
     assert not ok and "describe" in why, (m, why)
+    # in-script salad (0.5.0.5): the real Thai case — noise as an extra line of digits and symbols beside real text
+    thai_salad = [_OC(i, i + 1, t) for i, t in enumerate(["หยุคนะ หยุด", "4ส4๐ '\nแกรี นีมันอะไรกัน", "๐ ขม% เจ, ๕\nหมายศาลสำหรับยึดทรัพย์สิน",
+                                                           "๓๕ ๒\nไปกันเถอะ", "ฉันคิดถึง", "7๐ '๐\nเขาพูดถูก", "ทำไมล่ะ", "๐๐ %\nก็เพราะฉัน",
+                                                           "โอเค", "๕'๐\nเจอกัน", "บาย", "๐ ๐\nไม่ได้"])]
+    ok, m, why = _ocr.assess(thai_salad, "th")
+    assert not ok and "digits" in why, (m, why)
+    assert _ocr.assess(good_th + [_OC(50, 51, "1944")], "th")[0], "one year card is not salad"
     assert _ocr.clean_ocr("ท\u0e4d\u0e32ให้", "th") == "ทำให้", "Thai sara am as one character"
     assert _ocr.clean_ocr("什么cdots那是我表哥", "zh") == "什么…那是我表哥" and _ocr.clean_ocr(r"wait\ldots", "en") == "wait…"
     assert "th" in _ocr.VLM_SCRIPTS and "en" not in _ocr.VLM_SCRIPTS and "el" not in _ocr.VLM_SCRIPTS
