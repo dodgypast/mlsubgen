@@ -29,18 +29,20 @@ The GPU's memory picks a **hardware profile** at start (`mlsubgen models` or `ml
 The profiles below 24 GB share one trick, measured on 2026-10-03: the translator is Gemma 4's **26B
 mixture-of-experts** (`gemma4:26b`, 18 GB on disk) with only as many of its 30 layers on the card as fit, the rest
 run from system RAM by Ollama. Because only ~4B of its parameters are active per token, it stays fast with most of
-it off the card — 84 tok/s with 24 layers resident, 51 with 16, 40 with 8, against the 31B's 23 tok/s fully
-resident on a 24 GB card — and it translates almost as well as the 31B (chrF++ 30.2 against 31.0 on the same clip
-and reference; the dense 12B scores 29.0) and reads Thai, Chinese and Japanese bitmaps exactly as well (76 % /
-93.8 against the 31B's 77 % / 93.7). The price is system RAM for the part that is not on the card: a machine
-without it gets the dense small model instead (the `-dense` profiles, chosen automatically when the RAM is short).
+it off the card — generation at 84 tok/s with 24 layers resident, 51 with 16, 40 with 8 (short prompts, measured
+on a 24 GB card limited to those splits) — and it translates almost as well as the 31B (chrF++ 30.2 against 31.0
+on the same clip and reference; the dense 12B scores 29.0) and reads Thai, Chinese and Japanese bitmaps exactly as
+well (76 % / 93.8 against the 31B's 77 % / 93.7). End to end, prompts included, the ten-minute test clip
+translated into Thai in **68 s with the `16gb` split** (22 layers), 31 s with the 26B fully on a 24 GB card, and
+103 s with the 31B. The price is system RAM for the part that is not on the card: a machine without it gets the
+dense small model instead (the `-dense` profiles, chosen automatically when the RAM is short).
 
 | | `full` — 20 GB and up | `16gb` — 15 to 20 GB | `12gb` — 11 to 15 GB | `8gb` — under 11 GB |
 |---|---|---|---|---|
 | **cards, for example** | RTX 3090 / 4090 / 5090, RTX A5000 / A6000, L4 (24 GB) | RTX 4080, 4070 Ti Super, 4060 Ti 16 GB, 5070 Ti, RTX A4000, V100 | RTX 3060 12 GB, 4070, 3080 12 GB, 5070 | RTX 3050 / 3070 / 4060 (8 GB), 2070 / 2080 |
 | **system RAM for this profile** | 16 GB | 16 GB | 24 GB (else `12gb-dense`) | 32 GB (else `8gb-dense`) |
 | **speech recognition** | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in int8 (≈ 8 GB) | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB); the same two engines, slower per file |
-| **translation** | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair, fully on the card | `gemma4:26b`, 22 of 30 layers on the card (≈ 13 GB), ~80 tok/s | `gemma4:26b`, 14 layers on the card (≈ 9 GB), ~50 tok/s | `gemma4:26b`, 6 layers on the card (≈ 5 GB), ~35 tok/s |
+| **translation** | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair, fully on the card (the test clip: 103 s) | `gemma4:26b`, 22 of 30 layers on the card (≈ 13 GB): the test clip in 68 s, measured | `gemma4:26b`, 14 layers on the card (≈ 9 GB): generation ~50 tok/s, the clip in roughly 100 s | `gemma4:26b`, 6 layers on the card (≈ 5 GB): generation ~40 tok/s, the clip in roughly 2 min |
 | **translation, `-dense` fallback** | — | — | `gemma4:12b-it-qat` (7.2 GB): chrF++ 29.0 | `gemma4:e4b-it-qat` (6.1 GB): weaker again |
 | **language detection, per stretch** | yes | yes | yes | yes |
 | **embedded text subtitles** (used before the audio) | yes | yes | yes | yes |
