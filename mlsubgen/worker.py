@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import config, jobs
+from . import config, jobs, metrics
 
 STOP_GRACE_SEC = 90          # after a stop request, how long the child may take before it is killed
 INTERRUPT_CODES = (130, -2)  # exit codes of a SIGINT-interrupted `mlsubgen run`
@@ -200,9 +200,12 @@ class Worker:
         _log(f"worker started (pid {os.getpid()}, poll {self.poll:.0f}s, db {config.DB_PATH})"
              + (f" — requeued {resumed}" if resumed else ""))
         waiting: dict[int, tuple[float, str]] = {}        # job id → (since, last reason)
+        if metrics.enabled():
+            _log(f"metrics → {metrics.PATH}")
         try:
             while not self.stop.is_set():
                 job = jobs.next_queued(self.conn)
+                metrics.publish(busy=False, queued=self._queued())
                 if job is None:
                     self.stop.wait(self.poll)
                     continue
@@ -233,9 +236,16 @@ class Worker:
                 self.run_job(job)
         finally:
             _log("worker stopped")
+            metrics.publish(busy=False, queued=self._queued(), up=False)
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
         return 0
+
+    def _queued(self) -> int:
+        try:
+            return self.conn.execute("SELECT COUNT(*) FROM jobs WHERE status = ?", (jobs.QUEUED,)).fetchone()[0]
+        except Exception:                                  # noqa: BLE001
+            return 0
 
     def run_job(self, job: jobs.Job) -> None:
         attempt = job.attempts + 1
@@ -258,13 +268,18 @@ class Worker:
             jobs.update(self.conn, job.id, status=jobs.RUNNING, attempts=attempt, started=jobs.now(), finished=None,
                         exit_code=None, pid=self.child.pid, log=str(log_path), note="")
             _log(f"job {job.id} started (attempt {attempt}, pid {self.child.pid}): {job.label}  → {log_path.name}")
+            metrics.publish(busy=True, queued=self._queued(), job_id=job.id)
             cancelled = paused = False
+            beat = time.time()
             while True:
                 try:
                     rc = self.child.wait(timeout=5)
                     break
                 except subprocess.TimeoutExpired:
                     pass
+                if time.time() - beat >= 60:               # a heartbeat a minute while the job runs
+                    metrics.publish(busy=True, queued=self._queued(), job_id=job.id)
+                    beat = time.time()
                 cur = jobs.get(self.conn, job.id)
                 if cur is not None and cur.status == jobs.CANCELLING and not cancelled:
                     cancelled = True
@@ -279,6 +294,7 @@ class Worker:
                     self.child.kill()
                     self.stop_at = time.time() + 3600
         self.child = None
+        metrics.publish(busy=False, queued=self._queued())
         finished = jobs.now()
         if cancelled:
             jobs.update(self.conn, job.id, status=jobs.CANCELLED, finished=finished, exit_code=rc, pid=None,

@@ -5,8 +5,11 @@
 #   docker compose up -d --build
 #
 # Needs the NVIDIA Container Toolkit (`gpus: all`) and Ollama on this host with a translator model pulled
-# (`ollama pull qwen3.8:27b`). Host networking: the containers reach Ollama at 127.0.0.1:11434 and the web UI
-# listens on port 8790 — there is no login, so keep it on a LAN or VPN address.
+# (`mlsubgen pull` does it). Host networking: the containers reach Ollama at 127.0.0.1:11434 and the web UI
+# listens on port 8790. There is no login unless MLSUBGEN_WEB_AUTH=user:password is set in .env (HTTP Basic),
+# so keep it on a LAN or VPN address or behind a reverse proxy with its own login.
+# Bridged networking instead: drop `network_mode: host`, publish 8790, and point MLSUBGEN_LLM_URL at the host's
+# Ollama (http://host.docker.internal:11434 with `extra_hosts: ["host.docker.internal:host-gateway"]`).
 #
 # Media: MEDIA_DIR is bind-mounted at /media (rslave, so a share mounted after start still appears) and
 # MLSUBGEN_MEDIA_ROOTS tells the worker and the folder picker that /media is the place. More shares = more

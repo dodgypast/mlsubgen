@@ -1,7 +1,8 @@
 """`mlsubgen web` — the browser front end. A view over the job queue (mlsubgen.db) and the job logs, plus a form that
 queues new jobs and a page of skipped files that can be re-queued with --assume-ja. It never runs the pipeline
 itself: the mlsubgen-worker service does, and a job queued here is exactly `mlsubgen /folder [options]`.
-LAN-only, no login — bind it to a LAN or Tailscale address, not the internet."""
+No login unless MLSUBGEN_WEB_AUTH=user:password is set (HTTP Basic, every route) — bind it to a LAN or Tailscale
+address, or put it behind a reverse proxy with its own login, rather than on the internet."""
 from __future__ import annotations
 
 import asyncio
@@ -325,6 +326,25 @@ def read_skipped() -> list[dict]:
 def create_app() -> FastAPI:
     app = FastAPI(title="mlsubgen", version=__version__, docs_url=None, redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+
+    # HTTP Basic auth when MLSUBGEN_WEB_AUTH=user:password is set (0.5.0.10): one credential, every route including
+    # the JSON API and the log stream; compared in constant time. Off when the variable is absent — the LAN-only
+    # arrangement — and a reverse proxy with its own login is still the better answer for anything reachable
+    # from outside; this is the minimum that keeps a curious housemate out of the job queue.
+    auth = (os.environ.get("MLSUBGEN_WEB_AUTH") or "").strip()
+    if auth and ":" in auth:
+        import base64
+        import secrets
+        expected = base64.b64encode(auth.encode("utf-8")).decode("ascii")
+
+        @app.middleware("http")
+        async def basic_auth(request: Request, call_next):
+            header = request.headers.get("authorization", "")
+            given = header[6:].strip() if header.lower().startswith("basic ") else ""
+            if given and secrets.compare_digest(given, expected):
+                return await call_next(request)
+            from fastapi.responses import Response
+            return Response("mlsubgen: sign in", status_code=401, headers={"WWW-Authenticate": 'Basic realm="mlsubgen", charset="UTF-8"'})
 
     def render(request: Request, name: str, **ctx) -> HTMLResponse:
         return templates.TemplateResponse(request, name, {"version": __version__, "roots": media_roots(), **ctx})

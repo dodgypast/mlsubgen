@@ -111,7 +111,8 @@ docker compose run --rm worker pull   # the ASR models (~8 GB) and the two defau
 
 Or open `http://<host>:8790` and use the **Models** panel: it shows what is ready and pulls anything missing with
 a click, with progress. The worker uses a model as soon as it is there. The containers use host networking (Ollama at `127.0.0.1:11434`); the web UI
-has **no login**, so keep it on a LAN or VPN address. Your videos are bind-mounted at `/media`, and
+has **no login** unless `MLSUBGEN_WEB_AUTH` is set, so keep it on a LAN or VPN address or behind your proxy (see
+*Running it as a service*). Your videos are bind-mounted at `/media`, and
 `MLSUBGEN_MEDIA_ROOTS=/media` confines the folder picker and the worker to them. Stopping the worker container
 interrupts the running job cleanly; it resumes from its checkpoints on the next start.
 
@@ -287,6 +288,48 @@ deleted after each file's diarization and ASR are complete, and the per-file wor
 file remembers its verdict so a repeated run does not re-read it (`--source`, `--overwrite` or `--audio-track`
 retries it). `--keep-work` keeps the ASR cache to re-translate with another model; `mlsubgen clean` wipes leftovers.
 
+## Running it as a service
+
+The things a self-hoster asks before `docker compose up`:
+
+- **Login.** None by default. Set `MLSUBGEN_WEB_AUTH=user:password` in `.env` (or the unit's environment) and
+  every page and API route of the web UI asks for it (HTTP Basic). That is the minimum, not a security boundary:
+  for anything reachable from outside your LAN or VPN, put it behind your reverse proxy with its own login.
+- **Networking.** The compose stack uses `network_mode: host` because the translator is Ollama on the same host
+  at `127.0.0.1:11434`, and the web UI listens on `MLSUBGEN_WEB_PORT` (8790). To run it bridged, drop the host
+  mode, publish the port, and point `MLSUBGEN_LLM_URL` at the host's Ollama (`compose.yaml` has the lines).
+  Nothing listens but the web UI; the worker makes outbound calls to Ollama only.
+- **What it writes, and where.** Beside your videos: the `.srt` files, nothing else. Under `./data` (the
+  `MLSUBGEN_HOME` volume): the job queue (`mlsubgen.db`), job logs, `logs/skipped.log`, per-file work files (deleted
+  once a file's last `.srt` is written), the OCR cache, temporary audio, saved glossaries and `settings.json`.
+  Under `./models`: the Hugging Face cache (~8 GB) and the speaker models. Worth backing up: `settings.json` and any
+  glossaries; everything else is a cache or a log. The translators live in Ollama's own store.
+- **Idle footprint.** Between jobs the worker holds nothing on the card: the speech engines are loaded for a
+  round of files and freed after it, the vision model is unloaded after each track, and Ollama drops the
+  translator after its `keep_alive` (5 minutes by default). Idle, the two containers are a small Python process
+  each. Busy, see Hardware.
+- **Updating.** `git pull && docker compose up -d --build`; a running job is interrupted cleanly and resumes
+  from its checkpoints. On a host install: `git pull`, then `systemctl --user restart mlsubgen-worker
+  mlsubgen-web` — the services keep the code they imported until they are restarted.
+- **Scheduling.** There is no watch folder. A nightly `mlsubgen /media` from cron (or any scheduler) queues
+  whatever is new — files that already have their subtitle files are skipped at the scan, so running it over the
+  whole library every night is cheap — and the worker runs the queue one job at a time.
+- **Media servers.** Jellyfin, Plex, Emby and Kodi pick the `.srt` sidecars up on their next library scan, by the
+  language code in the file name. mlsubgen is not a Bazarr provider and has no webhook; it is a folder tool with a
+  queue. If you want a request from a media server to start a job, the queue has a JSON API (`POST /api/jobs` with
+  a `path`), which is what the web form calls.
+- **Monitoring.** A transcription keeps every core busy for the length of a film, which a CPU alert cannot tell
+  from a fault. Set `MLSUBGEN_METRICS_FILE` to a `.prom` file in node_exporter's textfile directory (the worker
+  must be allowed to write it; in Docker, bind-mount that directory) and the worker publishes
+  `mlsubgen_worker_busy`, `mlsubgen_worker_job_id`, `mlsubgen_jobs_queued`, `mlsubgen_worker_up` and a
+  heartbeat, atomically, a minute apart while a job runs. The alert rule then reads *CPU saturated **and**
+  `mlsubgen_worker_busy == 0`*. Unset, nothing is written.
+- **Compared with the whisper wrappers** (whisper-asr-webservice, Subgen, Bazarr's whisper provider): the speech
+  recognition is not the difference; the order of evidence is. Those transcribe; mlsubgen reads the subtitles the
+  file already has first, text or bitmap, and transcribes only what nothing covers, with the language decided per
+  stretch of speech and the translation done locally with the film's names rendered once. Every claim above has
+  a measurement behind it in this README; the wrappers are faster where a file has nothing to read.
+
 ## Configuration
 
 | variable | default | |
@@ -296,6 +339,8 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 | `MLSUBGEN_TARGETS` | `en` | default subtitle languages — a saved setting (`mlsubgen config targets …` or the web form's *make these the default*, kept in `settings.json` under `MLSUBGEN_HOME`) beats it; `--target` on a run beats both. English need not be among them: every route, rule and file name is per target. |
 | `MLSUBGEN_LLM_URL` | `http://127.0.0.1:11434` | the translator server |
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
+| `MLSUBGEN_WEB_AUTH` | *(none)* | `user:password` — HTTP Basic auth on every page and API route of the web UI |
+| `MLSUBGEN_METRICS_FILE` | *(none)* | a `.prom` file in node_exporter's textfile directory: the worker's busy / queue / heartbeat metrics for Prometheus |
 | `MLSUBGEN_PROFILE` | `auto` | `full`, `16gb`, `12gb`, `8gb`, `12gb-dense` or `8gb-dense` — see Hardware |
 | `HF_HUB_OFFLINE` | `0` | `1` after the models are downloaded: no contact with huggingface.co |
 
@@ -344,7 +389,8 @@ no network calls at all; Ollama and the web UI listen on the addresses you give 
 - **Language detection on mixed material is the weakest link.** It has improved a lot (per-stretch detection, three
   sources of evidence) but a file with two languages in quick alternation can still get a stretch wrong; `--source`
   forces the language, and `mlsubgen scan` shows what the detector sees without running the ASR.
-- The web UI has no authentication.
+- The web UI has no authentication unless `MLSUBGEN_WEB_AUTH` is set, and then only HTTP Basic: a reverse proxy
+  with a real login is the answer for anything exposed beyond a LAN or VPN.
 - NVIDIA only.
 - The `16gb`, `12gb` and `8gb` profiles have been measured on a 24 GB card limited to their layer splits, not on
   their own hardware: the ASR side is the same code with less resident at once, and the 26B's speed on a real

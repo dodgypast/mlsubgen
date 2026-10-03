@@ -2087,6 +2087,23 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     # (a name at a sentence start is not counted by the heuristic — the LLM pass is what finds those)
     assert _tm.build_glossary({"ミサエ": "มิซาเอะ", "ヒロシ": "ฮิโรชิ"}, {"ミサエ": "มิซาเอ"}) == {"ミサエ": "มิซาเอ", "ヒロシ": "ฮิโรชิ"}
     assert _tm._chunks(["a" * 100] * 50, 1000) and sum(len(p) for p in _tm._chunks(["a" * 100] * 50, 1000)) >= 5000
+    # metrics for node_exporter's textfile collector (0.5.0.11): a valid exposition, written atomically, off when unset
+    from . import metrics as _metrics
+    _orig_metrics_path = _metrics.PATH
+    with tempfile.TemporaryDirectory() as d:
+        _metrics.PATH = str(Path(d) / "mlsubgen.prom")
+        _metrics.publish(busy=True, queued=3, job_id=42)
+        body = (Path(d) / "mlsubgen.prom").read_text(encoding="utf-8")
+        assert "mlsubgen_worker_busy 1\n" in body and "mlsubgen_jobs_queued 3\n" in body and "mlsubgen_worker_job_id 42\n" in body and "mlsubgen_worker_up 1\n" in body
+        assert not (Path(d) / "mlsubgen.prom.tmp").exists(), "the write is a rename, not a partial file"
+        _metrics.publish(busy=False, queued=0, up=False)
+        body = (Path(d) / "mlsubgen.prom").read_text(encoding="utf-8")
+        assert "mlsubgen_worker_busy 0\n" in body and "mlsubgen_worker_up 0\n" in body
+        for line in body.splitlines():
+            assert not line or line.startswith("#") or len(line.split(" ")) == 2, f"not exposition format: {line!r}"
+        _metrics.PATH = ""
+        _metrics.publish(busy=True, queued=1)          # unset: a no-op, nothing raised
+        _metrics.PATH = _orig_metrics_path
     # the PGS regression corpus (0.5.0.6): real streams trimmed to a few display sets, kept OUT of the repository
     # (film content) under MLSUBGEN_HOME/tests/pgs with a manifest; checked when present, skipped when not
     import hashlib
