@@ -1,4 +1,4 @@
-# mlsubgen — subtitles in 45 languages for your videos, entirely on your own machine
+# mlsubgen — subtitles in 37 languages for your videos, entirely on your own machine
 
 ```
 cd /some/folder/of/videos
@@ -13,7 +13,8 @@ directory, and the only network traffic is the one-time download of the models.
 
 **mlsubgen** = *multi-language* + *machine-learning* subtitle generator. It started as a Japanese→English tool
 for a personal video collection and grew into a general one: the language of every stretch of speech is detected,
-each stretch is transcribed with that language forced, and each of 45 target languages gets its own file.
+each stretch is transcribed with that language forced, and each of 37 target languages gets its own file (45 are
+known; eight are withheld as targets until a translator measures well enough on them — see *Languages*).
 
 ## Hardware
 
@@ -83,7 +84,8 @@ Every step has a gate that drops evidence which is too thin or too muddled, and 
 - **Translation by an LLM** (Ollama, or any OpenAI-compatible server) in windows of 20 cues with rolling
   context, a glossary for names, per-language register rules (Thai particles, du/Sie, Simplified vs
   Traditional Chinese, …), and a per-line fallback for anything the model skips.
-- **45 subtitle languages**, chosen per job with tick boxes in the web UI or `--target en,th,de`; a cue already
+- **37 subtitle languages** (45 known; eight withheld as targets until measured good enough — see *Languages*),
+  chosen per job with tick boxes in the web UI or `--target en,th,de`; a cue already
   in the target language is copied through, not translated.
 - **Subtitle typesetting** per language: line length by script, reading-speed ceilings (slower for CJK), minimum
   durations and gaps, cluster-safe line breaks for Thai, Lao, Khmer, Burmese and Devanagari.
@@ -134,7 +136,7 @@ mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
 mlsubgen --speakers auto FOLDER  # with speaker diarization (mlsubgen pull speakers once);  --speakers 3  when you know the count
-mlsubgen languages               # the 45 codes, their native names, which engine decodes each
+mlsubgen languages               # the 37 offered codes, their native names, which engine decodes each; the withheld eight
 mlsubgen config targets th,de    # save the default languages (the web form has "make these the default");  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
 mlsubgen pull                    # download what a default run needs;  pull gemma4 · pull some/tag:latest · pull --all
@@ -268,11 +270,31 @@ when you give it a reference `.srt`) — the way to choose a model for a languag
 
 ### Languages
 
-`mlsubgen languages` lists the 45 codes. Every one is a target (the translator writes it) and a source (Qwen3-ASR
-decodes the languages its aligner covers — Japanese, Chinese, Cantonese, Korean, English, French, German, Italian,
-Portuguese, Russian, Spanish — and whisper the rest). Target quality is the translator's: the presets above are
-strong in the major languages and Thai, and `bench` is the way to judge a pair before a long run. Low-resource
-targets (Khmer, Lao, Burmese) depend heavily on the model.
+`mlsubgen languages` lists the 37 codes offered as targets. 45 languages are known: every one is a source (a
+subtitle track in it is read; Qwen3-ASR decodes the languages its aligner covers — Japanese, Chinese, Cantonese,
+Korean, English, French, German, Italian, Portuguese, Russian, Spanish — and whisper the rest), and 37 are
+targets. Target quality is the translator's, and on 2026-10-03 it was measured the only way that counts for 45
+languages at once: one episode translated into all of them from its English track and the same scene read in
+each, by a competent reader rather than a native speaker. Three tiers came out of it:
+
+- **Read well (29):** Japanese, Cantonese, Korean, Thai, French, German, Spanish, Italian, Portuguese, Russian,
+  Indonesian, Vietnamese, Turkish, Dutch, Polish, Czech, Swedish, Danish, Finnish, Norwegian, Romanian, Ukrainian,
+  Malay, Filipino, Persian, Arabic, Hindi, Bengali, Tamil. Natural register for the material (a five-year-old
+  talking to his father), idioms used where the language has them, names consistent.
+- **Usable, with known errors (7):** Chinese (fluent; was written in Traditional characters until the target was
+  named "Chinese (Simplified)" in the prompt), Hebrew (one mistranslated line in fifteen), Bulgarian, Croatian,
+  Catalan, Slovak, Slovenian (a wrong or invented word every ten to twenty lines — *escarabells* for *escarabats*,
+  *hrovi* for *hrošči*). Offered, because something is better than nothing when the limit is stated; `bench` on
+  your own material before a long run.
+- **Withheld as targets (8):** Greek, Hungarian, Lithuanian, Latvian, Estonian, Khmer, Lao, Burmese. Invented
+  words (Lithuanian *xolops* for beetle), broken grammar, English left in a line, and for the three Southeast Asian
+  scripts characters from other scripts leaking into the text. They are still read as sources and still detected;
+  they come back as targets when a translator measured on them passes — a bake-off of three translators on these
+  languages is the next measurement, and the routing table takes a model per language.
+
+The sample page the tiers were read from is in `bench/` after a run (`…45-languages.html`), and the same
+measurement is one `mlsubgen` run away on any file: the tiers are this translator on this material, not a verdict
+on the languages.
 
 ### Context and glossary
 

@@ -35,8 +35,10 @@ EXTRACT_PROMPT = ("Below is dialogue from {genre}, in {language}. List the prope
 # keeping "police". Recurrence is the criterion; the model's idea of a proper noun is not.
 RENDER_PROMPT = ("These terms come from {genre} in {source}. For each, give the form that {target} subtitles would use: "
                  "the standard {target} transliteration or spelling for names, the established {target} translation for "
-                 "titles and organisations, and the usual {target} word for anything else. Be consistent and conventional. "
-                 "Answer with one line per term in the form\nterm<TAB>rendering\nand nothing else.\n\n{terms}")
+                 "titles and organisations, and the usual {target} word for anything else. A character's name is rendered "
+                 "as the character is called in {target} dialogue, never as the title of the work the character is from. "
+                 "Be consistent and conventional. Answer with one line per term in the form\nterm<TAB>rendering\nand "
+                 "nothing else.\n\n{terms}")
 
 
 def _log(msg: str) -> None:

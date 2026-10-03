@@ -26,7 +26,7 @@ VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".webm", "
 
 # ── Languages ────────────────────────────────────────────────────────────────────────────────────────────
 # ISO code → the name Qwen3-ASR wants. Qwen speaks 30; these are the ones we name. Whisper takes the code.
-LANG_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese", "yue": "Cantonese", "ko": "Korean", "th": "Thai",
+LANG_NAMES = {"ja": "Japanese", "en": "English", "zh": "Chinese (Simplified)", "yue": "Cantonese (Traditional)", "ko": "Korean", "th": "Thai",
               "fr": "French", "de": "German", "es": "Spanish", "it": "Italian", "pt": "Portuguese", "ru": "Russian",
               "id": "Indonesian", "vi": "Vietnamese", "tr": "Turkish", "hi": "Hindi", "ar": "Arabic", "nl": "Dutch",
               "pl": "Polish", "cs": "Czech", "sv": "Swedish", "da": "Danish", "fi": "Finnish", "no": "Norwegian",
@@ -51,6 +51,15 @@ ASR_ROUTES = {"*": "whisper", **{lang: "qwen" for lang in ALIGNER_LANGS}}
 # a file whose dominant language is not in this set is skipped (reason logged); --source LANG forces it through.
 # Every language we can name is a source: the detector's confidence is the gate, the layers below are language-agnostic
 SOURCE_LANGS = set(LANG_NAMES)
+# Targets withheld (2026-10-03): one episode translated into every language and read showed the translator's output
+# in these to be below what can be shipped even with errors admitted — invented words (Lithuanian "xolops" for
+# beetle, Estonian "märgikäigid"), broken grammar (Greek), Hungarian forms, and for Khmer, Lao and Burmese other
+# scripts leaking into the text. They stay known languages (a subtitle track in them is still read as a source,
+# detection and OCR still handle them) but are not offered as targets until a translator measured on them passes.
+# The languages kept with known minor errors (Chinese, Hebrew, Bulgarian, Croatian, Catalan, Slovak, Slovenian) are
+# listed as such in the README; something is better than nothing when the limits are stated.
+UNSUPPORTED_TARGETS = {"el", "hu", "lt", "lv", "et", "km", "lo", "my"}
+TARGET_LANGS = {c: n for c, n in LANG_NAMES.items() if c not in UNSUPPORTED_TARGETS}
 # ── Default subtitle languages ───────────────────────────────────────────────────────────────────────────
 # Precedence: --target on a run  >  settings.json (set from the CLI: `mlsubgen config targets en,th`, or the web
 # form's "make these the default")  >  MLSUBGEN_TARGETS in the environment (the units / .env)  >  "en".
@@ -323,7 +332,7 @@ SPEAKER_MAX_CLUSTER_RATIO = 0.25   # … or more clusters than this share of the
 SPEAKERS_VERSION = 1           # part of the cache: bump when the models or the assignment change
 
 # ── Terminology (0.5.1): the film's names rendered once per target, fed to every translation window ─────────
-TERMS_VERSION = 3              # part of the cache: bump when the extraction or the prompts change
+TERMS_VERSION = 4              # part of the cache: bump when the extraction or the prompts change (4: a name is not a title)
                                # (2: the renderer dropped "ordinary words" — reversed in 3, it dropped the terms that mattered;
                                #  3: fragments of any word in the text are never terms)
 TERMS_MIN_CUES = 40            # a clip shorter than this has no recurring names worth a pass

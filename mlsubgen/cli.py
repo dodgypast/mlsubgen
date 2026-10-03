@@ -139,6 +139,11 @@ def parse_targets(text: str | None, warn: bool = True) -> list[str]:
             out.append(t)
     if not out:
         raise SystemExit("no target language (--target en,th)")
+    withheld = [t for t in out if t in config.UNSUPPORTED_TARGETS]
+    if withheld:
+        raise SystemExit(f"{', '.join(config.LANG_NAMES[t] for t in withheld)}: not offered as a subtitle language yet — the "
+                         f"translator's output in it was measured as not good enough to ship (2026-10-03); it returns when a "
+                         f"translator passes on it. `mlsubgen languages` lists what is offered")
     unknown = [t for t in out if t not in config.LANG_NAMES]
     if unknown and warn:
         # not an error: the translator is simply asked for the code as written, and typesetting uses the defaults
@@ -160,11 +165,13 @@ def cmd_languages(a: argparse.Namespace) -> int:
     """The subtitle languages: every code is a target (the translator writes it) and a source (decoded by Qwen3-ASR
     where its aligner covers the language, by whisper elsewhere)."""
     defaults = set(config.DEFAULT_TARGETS.split(","))
-    print(f"{'code':<5} {'language':<12} {'native':<18} {'ASR':<8} default")
-    for code, name in sorted(config.LANG_NAMES.items(), key=lambda kv: kv[1]):
+    print(f"{'code':<5} {'language':<22} {'native':<18} {'ASR':<8} default")
+    for code, name in sorted(config.TARGET_LANGS.items(), key=lambda kv: kv[1]):
         engine = "qwen" if code in config.ALIGNER_LANGS else "whisper"
         print(f"{code:<5} {name:<12} {config.NATIVE_NAMES.get(code, ''):<18} {engine:<8} {'yes' if code in defaults else ''}")
-    print(f"\n{len(config.LANG_NAMES)} languages · defaults: {config.DEFAULT_TARGETS} (MLSUBGEN_TARGETS, or --target per run)")
+    print(f"\n{len(config.TARGET_LANGS)} languages · defaults: {config.DEFAULT_TARGETS} (MLSUBGEN_TARGETS, or --target per run)")
+    print(f"known but not offered as targets yet (the translator measured below shippable, 2026-10-03; still read as sources): "
+          + ", ".join(config.LANG_NAMES[c] for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
     return 0
 
 
@@ -181,7 +188,7 @@ USAGE
 QUICK START
   mlsubgen pull                          download the models: ASR (~8 GB) + the default translators (into Ollama)
   cd /folder/of/videos && mlsubgen       <video>.{config.DEFAULT_TARGETS.split(',')[0]}.srt for every video (default languages: {config.DEFAULT_TARGETS})
-  mlsubgen --target en,th,de FOLDER      one .srt per language;   mlsubgen languages   lists the {len(config.LANG_NAMES)} codes
+  mlsubgen --target en,th,de FOLDER      one .srt per language;   mlsubgen languages   lists the {len(config.TARGET_LANGS)} codes
   mlsubgen --source ja FOLDER            skip the language detector: the audio is Japanese
   mlsubgen --overwrite FILE              redo one file from scratch
 
@@ -192,7 +199,7 @@ COMMANDS
               lidbench   score the language detector on a multilingual film against its forced subtitle track
   models      pull       download models: mlsubgen pull | pull gemma4 | pull some/ollama:tag | pull asr | pull --all
               models     what is ready — translator presets in Ollama, ASR models in the Hugging Face cache
-              languages  the {len(config.LANG_NAMES)} subtitle languages: code, name, native name, which engine decodes it
+              languages  the {len(config.TARGET_LANGS)} subtitle languages: code, name, native name, which engine decodes it
   settings    config     the settings and where they come from;  config targets en,th  saves the default languages
               tracks     the audio and subtitle tracks of a file, and which audio track would be used
   queue       jobs       the queue of the worker service (--all for every job)
@@ -1879,6 +1886,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     from .probe import SubTrack as _ST
     from .subs import LANG_TAGS as _LT, code_for_tag, pick as _pick, plan_embedded
     assert all(c in _LT for c in config.LANG_NAMES) and code_for_tag("tgl") == "tl" and code_for_tag("khm") == "km"
+    # targets withheld (2026-10-03): still known languages, not offered as targets; the CLI refuses them plainly
+    assert len(config.TARGET_LANGS) == 37 and len(config.LANG_NAMES) == 45 and "el" not in config.TARGET_LANGS and "el" in config.LANG_NAMES
+    assert config.LANG_NAMES["zh"].endswith("(Simplified)") and config.LANG_NAMES["yue"].endswith("(Traditional)")
+    try:
+        parse_targets("en,el", warn=False)
+        raise AssertionError("a withheld target must be refused")
+    except SystemExit as e:
+        assert "Greek" in str(e)
+    assert parse_targets("en,th", warn=False) == ["en", "th"]
     assert code_for_tag("JPN") == "ja" and code_for_tag("und") is None and code_for_tag("xx") is None
     tracks = [_ST(0, 2, "khm", "", "subrip", True, False, False), _ST(1, 3, "und", "Bahasa Melayu", "ass", True, False, False),
               _ST(2, 4, "eng", "Signs & Songs", "ass", True, False, False), _ST(3, 5, "eng", "", "subrip", True, True, False),

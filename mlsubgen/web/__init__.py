@@ -72,8 +72,8 @@ def safe_path(raw: str) -> Path:
 def build_opts(f: dict) -> list[str]:
     """Form fields → `mlsubgen run` options (only what differs from the defaults, so the label stays readable)."""
     opts: list[str] = []
-    # the "Subtitles in" list: one tick box per language in config.LANG_NAMES (the dropdown lists them all)
-    targets = [t for t in config.LANG_NAMES if f.get(f"target_{t}")]
+    # the "Subtitles in" list: one tick box per offered target (config.TARGET_LANGS — the withheld ones are not listed)
+    targets = [t for t in config.TARGET_LANGS if f.get(f"target_{t}")]
     extra_t = (f.get("targets") or "").strip()
     if extra_t:
         targets += [t.strip().lower() for t in extra_t.split(",") if t.strip() and t.strip().lower() not in targets]
@@ -354,8 +354,8 @@ def create_app() -> FastAPI:
     def index(request: Request):
         defaults = config.DEFAULT_TARGETS.split(",")
         # the subtitle-language dropdown: the defaults first, then every other language by its English name
-        langs = [(c, config.LANG_NAMES[c], config.NATIVE_NAMES.get(c, "")) for c in defaults if c in config.LANG_NAMES]
-        langs += sorted(((c, n, config.NATIVE_NAMES.get(c, "")) for c, n in config.LANG_NAMES.items() if c not in defaults),
+        langs = [(c, config.LANG_NAMES[c], config.NATIVE_NAMES.get(c, "")) for c in defaults if c in config.TARGET_LANGS]
+        langs += sorted(((c, n, config.NATIVE_NAMES.get(c, "")) for c, n in config.TARGET_LANGS.items() if c not in defaults),
                         key=lambda x: x[1])
         return render(request, "index.html", translators=list(TRANSLATORS), default_targets=defaults, langs=langs,
                       last_folder=last_folder(),
@@ -524,9 +524,9 @@ def create_app() -> FastAPI:
         form = await request.form()
         raw = (form.get("targets") or "").strip()
         codes = [t.strip().lower() for t in raw.replace(";", ",").split(",") if t.strip()]
-        unknown = [c for c in codes if c not in config.LANG_NAMES]
+        unknown = [c for c in codes if c not in config.TARGET_LANGS]
         if unknown:
-            raise HTTPException(400, f"unknown language code(s): {', '.join(unknown)}")
+            raise HTTPException(400, f"not an offered subtitle language: {', '.join(unknown)}")
         val, src = config.set_default_targets(codes)
         return {"targets": val.split(","), "targets_source": src,
                 "result": f"default subtitle languages: {val}" + ("" if codes else f" ({src})")}
