@@ -132,7 +132,7 @@ class LLMClient:
         t0 = time.time()
         messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
         if self.backend == "ollama":
-            options = {"temperature": self.tr.temperature, "num_ctx": self.tr.num_ctx, "num_predict": max_tokens,
+            options = {"temperature": self.tr.temperature, "num_ctx": self.tr.num_ctx, **({"num_gpu": config.OLLAMA_NUM_GPU} if config.OLLAMA_NUM_GPU else {}), "num_predict": max_tokens,
                        **self.tr.extra_options}
             if nudge:
                 options.update({**_NUDGE, "temperature": max(self.tr.temperature, 0.0) + _NUDGE["temperature"],

@@ -1572,6 +1572,8 @@ def cmd_config(a: argparse.Namespace) -> int:
             return 0
     print(f"{'default subtitle languages':<30} {config.DEFAULT_TARGETS:<24} from {config.DEFAULT_TARGETS_SOURCE}")
     print(f"{'profile':<30} {config.PROFILE:<24} " + (f"{config.VRAM_GB:.0f} GB GPU detected" if config.VRAM_GB else "no GPU detected")
+          + (f", {config.RAM_GB:.0f} GB RAM" if config.RAM_GB else "")
+          + (f", translator layers on the card: {config.OLLAMA_NUM_GPU}" if config.OLLAMA_NUM_GPU else "")
           + (" (MLSUBGEN_PROFILE)" if os.environ.get("MLSUBGEN_PROFILE") else " (auto)"))
     print(f"{'translator server':<30} {config.LLM_URL}")
     print(f"{'media roots':<30} {os.environ.get('MLSUBGEN_MEDIA_ROOTS') or '(not set — every path allowed from the CLI)'}")
@@ -1609,7 +1611,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     # hardware profiles (2026-10-01): the thresholds, forcing, and what each profile sets; the route assertions
     # below are written for the full profile, so it is made active here whatever card this runs on
     assert config.pick_profile("auto", None) == "full" and config.pick_profile("auto", 24.0) == "full"
-    assert config.pick_profile("auto", 12.0) == "12gb" and config.pick_profile("auto", 8.0) == "8gb" and config.pick_profile("auto", 16.0) == "12gb"
+    assert config.pick_profile("auto", 12.0) == "12gb" and config.pick_profile("auto", 8.0) == "8gb" and config.pick_profile("auto", 16.0) == "16gb"
     assert config.pick_profile("8gb", 48.0) == "8gb"
     try:
         config.pick_profile("huge", None); raise AssertionError("an unknown profile must be rejected")
@@ -1617,11 +1619,20 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         pass
     assert all(config.PROFILES[p]["default"] in TRANSLATORS and set(config.PROFILES[p]["routes"].values()) <= set(TRANSLATORS)
                for p in config.PROFILES), "every profile's presets must exist"
-    config.apply_profile("8gb")
+    config.apply_profile("8gb-dense")
     assert config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "int8_float16" and config.DEFAULT_TRANSLATOR == "gemma4-e4b"
     assert os.environ.get("MLSUBGEN_OCR_VLM") or config.OCR_VLM_MODEL == "gemma4:e4b-it-qat", "the vision model follows the profile"
+    # the 26B profiles (2026-10-03): the same mixture-of-experts on 16, 12 and 8 GB cards with a layer split per card
+    config.apply_profile("8gb")
+    assert config.ASR_SEQUENTIAL and config.DEFAULT_TRANSLATOR == "gemma4-26b" and config.OLLAMA_NUM_GPU == 6
+    config.apply_profile("16gb")
+    assert not config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "float16" and config.DEFAULT_TRANSLATOR == "gemma4-26b" and config.OLLAMA_NUM_GPU == 22
+    assert os.environ.get("MLSUBGEN_OCR_VLM") or config.OCR_VLM_MODEL == "gemma4:26b"
+    config.apply_profile("12gb")
+    assert config.WHISPER_COMPUTE == "int8_float16" and config.DEFAULT_TRANSLATOR == "gemma4-26b" and config.OLLAMA_NUM_GPU == 14
+    assert config.pick_profile("auto", 16.0) == "16gb" and config.pick_profile("auto", 12.0) == "12gb" and config.pick_profile("auto", 24.0) == "full" and config.pick_profile("auto", 8.0) == "8gb"
     config.apply_profile("full")
-    assert not config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "float16" and config.TRANSLATE_ROUTES[("ja", "en")] == "qwen3.8"
+    assert not config.ASR_SEQUENTIAL and config.WHISPER_COMPUTE == "float16" and config.TRANSLATE_ROUTES[("ja", "en")] == "qwen3.8" and config.OLLAMA_NUM_GPU is None
     assert os.environ.get("MLSUBGEN_OCR_VLM") or config.OCR_VLM_MODEL == "gemma4:31b-it-qat"
 
     # cues from words: sentence end, gap split, overflow
@@ -2028,8 +2039,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _ocr.clean_ocr("什么cdots那是我表哥", "zh") == "什么…那是我表哥" and _ocr.clean_ocr(r"wait\ldots", "en") == "wait…"
     assert "th" in _ocr.VLM_SCRIPTS and "en" not in _ocr.VLM_SCRIPTS and "el" not in _ocr.VLM_SCRIPTS
     _prof = config.PROFILE
-    config.apply_profile("8gb")
-    assert _ocr.engine_for("th") is None, "the 8gb profile's vision model does not read Thai well enough"
+    config.apply_profile("8gb-dense")
+    assert _ocr.engine_for("th") is None, "the E4B does not read Thai well enough: no engine on the dense 8 GB profile"
     config.apply_profile(_prof)
     # a truncated run-length fragment decodes what it can instead of raising
     assert len(_ocr._rle_decode(bytes([0, 0x84]), 4, 1)) == 4

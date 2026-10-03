@@ -396,7 +396,8 @@ def ocr_vlm(png: bytes, lang: str, model: str | None = None, url: str | None = N
     # 150 Thai images came back empty at eight seconds each; the translator presets switch thinking off the same way)
     body = {"model": model, "prompt": VLM_PROMPT.format(language=config.LANG_NAMES.get(lang, lang), extra=VLM_EXTRA.get(lang, "")),
             "images": [base64.b64encode(png).decode("ascii")], "stream": False, "think": False,
-            "options": {"temperature": 0, "num_predict": 200}, "keep_alive": "10m"}
+            "options": {"temperature": 0, "num_predict": 200, **({"num_gpu": config.OLLAMA_NUM_GPU} if config.OLLAMA_NUM_GPU else {})},
+            "keep_alive": "10m"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=120) as resp:
         text = json.loads(resp.read().decode("utf-8")).get("response", "")
@@ -450,7 +451,7 @@ VLM_SCRIPTS = {"ja", "zh", "yue", "ko", "th", "lo", "km", "my", "hi", "bn", "ta"
 def engine_for(lang: str) -> str | None:
     """The engine that reads bitmap subtitles in `lang` on this machine, or None when none can."""
     if lang in VLM_SCRIPTS:
-        if config.PROFILE == "8gb":
+        if config.OCR_VLM_MODEL.startswith("gemma4:e4b"):      # the E4B read Thai at 18 %: not a reader of these scripts
             return None
         return "vlm" if engine_available("vlm", lang)[0] else None
     return "tesseract" if tesseract_available(lang)[0] else None

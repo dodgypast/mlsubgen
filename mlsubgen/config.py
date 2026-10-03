@@ -106,21 +106,43 @@ def set_default_targets(codes: list[str] | None) -> tuple[str, str]:
 # Filled in from the hardware profile below (apply_profile) — see PROFILES.
 TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
 
-# ── Hardware profiles (2026-10-01) ───────────────────────────────────────────────────────────────────────────
+# ── Hardware profiles (2026-10-01; the 26B profiles 2026-10-03) ─────────────────────────────────────────────
 # The ASR stage and the translation stage never share the GPU, so the card only has to hold the bigger of the two.
-#   full  ≥ 20 GB   both ASR engines resident (≈ 10 GB); 27–31B translators (17–19 GB)
-#   12gb  11–20 GB  both engines resident, whisper in int8 (≈ 8 GB); gemma4:12b-it-qat (7.2 GB)
-#   8gb   < 11 GB   one ASR engine at a time (Qwen ≈ 5 GB, then whisper int8 ≈ 2.5 GB); gemma4:e4b-it-qat (6.1 GB)
+#   full  ≥ 20 GB   both ASR engines resident (≈ 10 GB); 27–31B translators (17–19 GB), fully on the card
+#   16gb  15–20 GB  both engines resident, float16 (≈ 10 GB); the 26B MoE with 22 of 30 layers on the card
+#   12gb  11–15 GB  both engines resident, whisper int8 (≈ 8 GB); the 26B with 14 layers on the card (24 GB RAM)
+#   8gb   < 11 GB   one ASR engine at a time; the 26B with 6 layers on the card (32 GB RAM)
+#   12gb-dense / 8gb-dense: gemma4:12b-it-qat / gemma4:e4b-it-qat, for machines without the RAM for the 26B's rest
 # Picked from the GPU's memory at start (MLSUBGEN_PROFILE=auto), or forced: MLSUBGEN_PROFILE=12gb / --profile 12gb.
-# The smaller translators are weaker, especially for Japanese → English — `mlsubgen bench` shows by how much.
+# The 26B mixture-of-experts (gemma4:26b, 30 layers, 18 GB, ~4B parameters active per token) measured 2026-10-03 on
+# the Shin-chan clip against the human reference: chrF++ 12B 29.0 · 26B 30.2 · 31B 31.0, at 50 / 84 / 23 tok/s on a
+# 24 GB card; as a vision OCR engine on Thai bitmaps 26B 76 % / 93.8 = the 31B's 77 % / 93.7 (the 12B: 65 % / 89.3).
+# Ollama runs the layers that do not fit on the CPU, and because so few parameters are active it stays fast:
+#   layers on the card   24 (13.8 GB)   16 (9.7 GB)   8 (5.6 GB)
+#   tok/s                84             51            40
+# So cards from 8 GB up can run the 26B — IF the machine has the system RAM for the rest of the model (the
+# remainder is read from RAM every token). The profiles below take the 26B where the card AND the RAM allow it,
+# and fall back to the dense small models otherwise. OLLAMA_NUM_GPU is the layer split, passed on every request.
 PROFILES = {
     "full": dict(min_vram_gb=20.0, routes={("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}, default="qwen3.8",
-                 whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat"),
-    "12gb": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-12b"}, default="gemma4-12b",
-                 whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:12b-it-qat"),
-    "8gb": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
-                whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:e4b-it-qat"),
+                 whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat", num_gpu=None, min_ram_gb=16),
+    "16gb": dict(min_vram_gb=15.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+                 whisper_compute="float16", asr_sequential=False, vlm="gemma4:26b", num_gpu=22, min_ram_gb=16,
+                 fallback="12gb-dense"),
+    "12gb": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+                 whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:26b", num_gpu=14, min_ram_gb=24,
+                 fallback="12gb-dense"),
+    "8gb": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+                whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:26b", num_gpu=6, min_ram_gb=32,
+                fallback="8gb-dense"),
+    # the dense small models, for machines without the RAM for the 26B's remainder
+    "12gb-dense": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-12b"}, default="gemma4-12b",
+                       whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:12b-it-qat", num_gpu=None, min_ram_gb=0),
+    "8gb-dense": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
+                      whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:e4b-it-qat", num_gpu=None, min_ram_gb=0),
 }
+OLLAMA_NUM_GPU: int | None = None   # layers of the translator / vision model kept on the card; None = all (set by the profile)
+RAM_GB: float | None = None         # system memory, detected
 PROFILE = "full"                    # the active profile (set by apply_profile at import, below)
 DEFAULT_TRANSLATOR = "qwen3.8"      # the preset that reconciles the two ASR transcripts and stands in for a missing route
 WHISPER_COMPUTE = "float16"         # faster-whisper compute type (int8_float16 halves its memory)
@@ -155,7 +177,7 @@ def pick_profile(name: str | None, vram_gb: float | None) -> str:
         return name
     if vram_gb is None:
         return "full"
-    for prof in ("full", "12gb", "8gb"):
+    for prof in ("full", "16gb", "12gb", "8gb"):              # the -dense ones are never picked by memory: the RAM gate does that
         if vram_gb >= PROFILES[prof]["min_vram_gb"]:
             return prof
     return "8gb"
@@ -164,20 +186,38 @@ def pick_profile(name: str | None, vram_gb: float | None) -> str:
 def apply_profile(name: str | None = None) -> str:
     """Make `name` (or MLSUBGEN_PROFILE / auto-detection) the active profile: routes, default translator, whisper
     compute type, sequential ASR. Mutates the module's values in place, so every `config.X` reader sees it."""
-    global PROFILE, DEFAULT_TRANSLATOR, WHISPER_COMPUTE, ASR_SEQUENTIAL, VRAM_GB, OCR_VLM_MODEL
+    global PROFILE, DEFAULT_TRANSLATOR, WHISPER_COMPUTE, ASR_SEQUENTIAL, VRAM_GB, OCR_VLM_MODEL, OLLAMA_NUM_GPU, RAM_GB
     want = name or os.environ.get("MLSUBGEN_PROFILE") or "auto"
     if want == "auto" and VRAM_GB is None:
         VRAM_GB = detect_vram_gb()
+    if RAM_GB is None:
+        RAM_GB = detect_ram_gb()
     PROFILE = pick_profile(want, VRAM_GB)
     p = PROFILES[PROFILE]
+    # a profile that runs the 26B partly from system RAM needs that RAM; without it, its dense fallback
+    if want == "auto" and p.get("fallback") and RAM_GB is not None and RAM_GB < p["min_ram_gb"]:
+        PROFILE = p["fallback"]
+        p = PROFILES[PROFILE]
     TRANSLATE_ROUTES.clear()
     TRANSLATE_ROUTES.update(p["routes"])
     DEFAULT_TRANSLATOR = p["default"]
     WHISPER_COMPUTE = p["whisper_compute"]
     ASR_SEQUENTIAL = p["asr_sequential"]
+    OLLAMA_NUM_GPU = p.get("num_gpu")
     if not os.environ.get("MLSUBGEN_OCR_VLM"):
         OCR_VLM_MODEL = p["vlm"]
     return PROFILE
+
+
+def detect_ram_gb() -> float | None:
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        return None
+    return None
 
 
 apply_profile()
@@ -375,7 +415,7 @@ TRANSLATORS: dict[str, Translator] = {
     # for 16 GB cards (Ollama offloads part of it to the CPU below that).
     "gemma4-12b": Translator("gemma4-12b", "gemma4:12b-it-qat", note="Gemma 4 12B QAT, 7.2 GB — the 12gb profile", think=False),
     "gemma4-e4b": Translator("gemma4-e4b", "gemma4:e4b-it-qat", note="Gemma 4 E4B QAT, 6.1 GB — the 8gb profile", think=False),
-    "gemma4-26b": Translator("gemma4-26b", "gemma4:26b", note="Gemma 4 26B-A4B MoE, 16–19 GB — 16 GB cards", think=False),
+    "gemma4-26b": Translator("gemma4-26b", "gemma4:26b", note="Gemma 4 26B-A4B MoE, 18 GB, ~4B active — the 16gb/12gb/8gb profiles, split across card and RAM", think=False),
 }
 # DEFAULT_TRANSLATOR is set by apply_profile() above (qwen3.8 on the full profile)
 

@@ -23,25 +23,37 @@ each stretch is transcribed with that language forced, and each of 45 target lan
 | **Disk** | **30–65 GB** depending on the profile | Docker image ~14 GB (or the venv ~6 GB on the host) · ASR models ~8 GB (Qwen3-ASR + its aligner, whisper large-v3) · translators in Ollama: `full` ≈ 37 GB (two models), `12gb` 7 GB, `8gb` 6 GB · speaker models 33 MB · tesseract packs ~0.5 GB · work files and OCR cache a few MB per video; the temporary wav is ~120 MB per hour of video and deleted after use |
 | **OS / tools** | Linux; `ffmpeg`/`ffprobe`; [Ollama](https://ollama.com) on the same host; Docker with the NVIDIA Container Toolkit, or Python 3.12 + [uv](https://docs.astral.sh/uv/) for a host install | tested on Arch-family (CachyOS) and Debian-family systems |
 
-The GPU's memory picks a **hardware profile** at start (`mlsubgen models` shows it; `MLSUBGEN_PROFILE=12gb` or
-`--profile 12gb` forces one; `mlsubgen pull` downloads what the active profile needs). What each profile gives:
+The GPU's memory picks a **hardware profile** at start (`mlsubgen models` or `mlsubgen config` shows it;
+`MLSUBGEN_PROFILE=12gb` or `--profile 12gb` forces one; `mlsubgen pull` downloads what the active profile needs).
 
-| | `full` — 20 GB and up | `12gb` — 11 to 20 GB | `8gb` — under 11 GB |
-|---|---|---|---|
-| **cards, for example** | RTX 3090 / 4090 / 5090, RTX A5000 / A6000, L4 (24 GB) | RTX 3060 12 GB, 4070 / 4070 Ti / 4080 (12–16 GB), 4060 Ti 16 GB, RTX A4000 | RTX 3050 / 3070 / 4060 (8 GB), 2070 / 2080 |
-| **speech recognition** | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in int8 (≈ 8 GB) | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB); the same two engines, slower per file |
-| **translation** | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair (17–19 GB each) | `gemma4:12b-it-qat` (7.2 GB) for every pair — noticeably weaker, most of all Japanese → English | `gemma4:e4b-it-qat` (6.1 GB) for every pair — weaker again |
-| **language detection, per stretch** | yes | yes | yes |
-| **embedded text subtitles** (used before the audio) | yes | yes | yes |
-| **bitmap subtitles, Latin / Greek / Cyrillic** (tesseract, CPU) | yes | yes | yes |
-| **bitmap subtitles, Thai / Chinese / Japanese / Korean / stacked scripts** (vision model) | yes — `gemma4:31b` reads them | yes — `gemma4:12b`, measured usable but weaker | **no** — the E4B does not read them well enough; those tracks are left alone and the audio is transcribed |
-| **speaker diarization** (CPU) | yes | yes | yes |
-| **terminology pass** (names rendered once per film) | yes | yes (with the 12B) | yes (with the E4B) |
-| **bench / lidbench / ocrbench** | yes | yes | yes |
+The profiles below 24 GB share one trick, measured on 2026-10-03: the translator is Gemma 4's **26B
+mixture-of-experts** (`gemma4:26b`, 18 GB on disk) with only as many of its 30 layers on the card as fit, the rest
+run from system RAM by Ollama. Because only ~4B of its parameters are active per token, it stays fast with most of
+it off the card — 84 tok/s with 24 layers resident, 51 with 16, 40 with 8, against the 31B's 23 tok/s fully
+resident on a 24 GB card — and it translates almost as well as the 31B (chrF++ 30.2 against 31.0 on the same clip
+and reference; the dense 12B scores 29.0) and reads Thai, Chinese and Japanese bitmaps exactly as well (76 % /
+93.8 against the 31B's 77 % / 93.7). The price is system RAM for the part that is not on the card: a machine
+without it gets the dense small model instead (the `-dense` profiles, chosen automatically when the RAM is short).
 
-On a 16 GB card the `12gb` profile applies; `-t gemma4-26b` tries the 26B-A4B mixture-of-experts translator
-(16–19 GB) there, with Ollama offloading part of it to the CPU. `mlsubgen bench` shows what any of these choices
-costs on your own material before a long run.
+| | `full` — 20 GB and up | `16gb` — 15 to 20 GB | `12gb` — 11 to 15 GB | `8gb` — under 11 GB |
+|---|---|---|---|---|
+| **cards, for example** | RTX 3090 / 4090 / 5090, RTX A5000 / A6000, L4 (24 GB) | RTX 4080, 4070 Ti Super, 4060 Ti 16 GB, 5070 Ti, RTX A4000, V100 | RTX 3060 12 GB, 4070, 3080 12 GB, 5070 | RTX 3050 / 3070 / 4060 (8 GB), 2070 / 2080 |
+| **system RAM for this profile** | 16 GB | 16 GB | 24 GB (else `12gb-dense`) | 32 GB (else `8gb-dense`) |
+| **speech recognition** | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in int8 (≈ 8 GB) | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB); the same two engines, slower per file |
+| **translation** | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair, fully on the card | `gemma4:26b`, 22 of 30 layers on the card (≈ 13 GB), ~80 tok/s | `gemma4:26b`, 14 layers on the card (≈ 9 GB), ~50 tok/s | `gemma4:26b`, 6 layers on the card (≈ 5 GB), ~35 tok/s |
+| **translation, `-dense` fallback** | — | — | `gemma4:12b-it-qat` (7.2 GB): chrF++ 29.0 | `gemma4:e4b-it-qat` (6.1 GB): weaker again |
+| **language detection, per stretch** | yes | yes | yes | yes |
+| **embedded text subtitles** (used before the audio) | yes | yes | yes | yes |
+| **bitmap subtitles, Latin / Greek / Cyrillic** (tesseract, CPU) | yes | yes | yes | yes |
+| **bitmap subtitles, Thai / Chinese / Japanese / Korean / stacked scripts** (vision model) | yes — the 31B | yes — the 26B, as good as the 31B | yes — the 26B (`12gb-dense`: the 12B, usable but weaker) | yes — the 26B, slower (`8gb-dense`: **no**, the E4B cannot read them; those tracks are left alone and the audio transcribed) |
+| **speaker diarization** (CPU) | yes | yes | yes | yes |
+| **terminology pass** (names rendered once per film) | yes | yes | yes | yes |
+| **bench / lidbench / ocrbench** | yes | yes | yes | yes |
+
+The layer splits leave room for the context window and the vision encoder; the speeds are from a 24 GB card
+limited to those splits, so a real 16 GB card with the same split should land close, a slower CPU and RAM lower.
+Only the `full` profile has been run on its own hardware for weeks; the others run the same code with less on the
+card. `mlsubgen bench` shows what any choice costs on your own material before a long run.
 
 ## What it does
 
@@ -226,7 +238,7 @@ Presets in `mlsubgen/config.py`; `mlsubgen models` shows which are pulled.
 | `qwen3-30b` | `qwen3:30b-a3b-instruct-2507-q4_K_M` (18 GB) | the fast MoE fallback (~3 B active) |
 | `gemma4-12b` | `gemma4:12b-it-qat` (7.2 GB) | the `12gb` profile's translator |
 | `gemma4-e4b` | `gemma4:e4b-it-qat` (6.1 GB) | the `8gb` profile's translator |
-| `gemma4-26b` | `gemma4:26b` (16–19 GB) | 26B-A4B MoE for 16 GB cards (`-t gemma4-26b`) |
+| `gemma4-26b` | `gemma4:26b` (18 GB; ~4B active) | the `16gb`, `12gb` and `8gb` profiles' translator and vision model — part of it on the card, the rest in RAM (see Hardware); on a 24 GB card `-t gemma4-26b` trades 0.8 chrF++ for 3.7× the speed |
 
 `-t NAME` forces one preset for every pair; `--model TAG` any Ollama model; `--backend openai --url http://host:port
 --model NAME` any OpenAI-compatible server (llama-server, vLLM …). `mlsubgen bench VIDEO --clip 0:10:00-0:20:00`
@@ -264,7 +276,7 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 | `MLSUBGEN_TARGETS` | `en` | default subtitle languages — a saved setting (`mlsubgen config targets …` or the web form's *make these the default*, kept in `settings.json` under `MLSUBGEN_HOME`) beats it; `--target` on a run beats both. English need not be among them: every route, rule and file name is per target. |
 | `MLSUBGEN_LLM_URL` | `http://127.0.0.1:11434` | the translator server |
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
-| `MLSUBGEN_PROFILE` | `auto` | `full`, `12gb` or `8gb` — see Hardware |
+| `MLSUBGEN_PROFILE` | `auto` | `full`, `16gb`, `12gb`, `8gb`, `12gb-dense` or `8gb-dense` — see Hardware |
 | `HF_HUB_OFFLINE` | `0` | `1` after the models are downloaded: no contact with huggingface.co |
 
 Everything else (chunk lengths, cue limits, line widths, reading speeds, hallucination patterns) is in
@@ -277,8 +289,10 @@ Everything else (chunk lengths, cue limits, line widths, reading speeds, halluci
   forces the language, and `mlsubgen scan` shows what the detector sees without running the ASR.
 - The web UI has no authentication.
 - NVIDIA only.
-- The `12gb` and `8gb` profiles are new and lightly tested: the ASR side is the same code with less resident at
-  once, but the small translators have had far less use than the 27–31B ones. Reports welcome.
+- The `16gb`, `12gb` and `8gb` profiles have been measured on a 24 GB card limited to their layer splits, not on
+  their own hardware: the ASR side is the same code with less resident at once, and the 26B's speed on a real
+  card depends on its CPU and RAM as much as on the GPU. Reports from those cards are the most useful thing a
+  user can send.
 - Diarization can be unreliable with overlapping speech, similar voices and music-heavy material, and on a
   feature film the clustering tends to split a cast into many more "voices" than there are. Speaker evidence is
   therefore advisory and ignored where it is too thin, too muddled or too fragmented; the feature is off by
