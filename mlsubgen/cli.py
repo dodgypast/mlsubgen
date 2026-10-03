@@ -141,6 +141,7 @@ def parse_targets(text: str | None, warn: bool = True, allow_withheld: bool = Fa
             out.append(t)
     if not out:
         raise SystemExit("no target language (--target en,th)")
+    allow_withheld = allow_withheld or os.environ.get("MLSUBGEN_ALLOW_WITHHELD") == "1"   # measurement runs only
     withheld = [t for t in out if t in config.UNSUPPORTED_TARGETS and not allow_withheld]
     if withheld:
         raise SystemExit(f"{', '.join(config.LANG_NAMES[t] for t in withheld)}: not offered as a subtitle language yet — the "
