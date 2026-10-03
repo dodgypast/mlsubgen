@@ -131,7 +131,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--window", type=int, default=config.WINDOW_CUES, help="cues per translation request")
 
 
-def parse_targets(text: str | None, warn: bool = True) -> list[str]:
+def parse_targets(text: str | None, warn: bool = True, allow_withheld: bool = False) -> list[str]:
+    """allow_withheld: the benches measure withheld languages — that is how one earns its way back — so they may
+    translate into them; a run may not."""
     out = []
     for t in (text or config.DEFAULT_TARGETS).replace(";", ",").split(","):
         t = t.strip().lower()
@@ -139,7 +141,7 @@ def parse_targets(text: str | None, warn: bool = True) -> list[str]:
             out.append(t)
     if not out:
         raise SystemExit("no target language (--target en,th)")
-    withheld = [t for t in out if t in config.UNSUPPORTED_TARGETS]
+    withheld = [t for t in out if t in config.UNSUPPORTED_TARGETS and not allow_withheld]
     if withheld:
         raise SystemExit(f"{', '.join(config.LANG_NAMES[t] for t in withheld)}: not offered as a subtitle language yet — the "
                          f"translator's output in it was measured as not good enough to ship (2026-10-03); it returns when a "
@@ -867,7 +869,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
     glossary = load_glossary(a.glossary)
     clip = clip_arg(a.clip)
     names = [n.strip() for n in a.translators.split(",") if n.strip()]
-    target = parse_targets(a.target)[0]
+    target = parse_targets(a.target, allow_withheld=True)[0]        # the bench measures withheld languages too
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
               a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms)
@@ -1895,6 +1897,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     except SystemExit as e:
         assert "Greek" in str(e)
     assert parse_targets("en,th", warn=False) == ["en", "th"]
+    assert parse_targets("el", warn=False, allow_withheld=True) == ["el"], "the bench may measure a withheld language"
     assert code_for_tag("JPN") == "ja" and code_for_tag("und") is None and code_for_tag("xx") is None
     tracks = [_ST(0, 2, "khm", "", "subrip", True, False, False), _ST(1, 3, "und", "Bahasa Melayu", "ass", True, False, False),
               _ST(2, 4, "eng", "Signs & Songs", "ass", True, False, False), _ST(3, 5, "eng", "", "subrip", True, True, False),
