@@ -6,8 +6,10 @@ mlsubgen
 ```
 
 Every video in the folder and below it gets one `.srt` per subtitle language you asked for
-(`<video>.en.srt`, `<video>.th.srt` …). Nothing leaves the machine: the speech is transcribed by local models,
-translated by a local LLM, and the only things written are the `.srt` files beside the videos.
+(`<video>.en.srt`, `<video>.th.srt` …). Your media and its subtitle text never leave the machine: the speech is
+transcribed by local models and translated by a local LLM. The only files written beside your videos are the
+`.srt` files; mlsubgen's own state (work files, logs, the OCR cache, temporary audio) lives under its own
+directory, and the only network traffic is the one-time download of the models.
 
 **mlsubgen** = *multi-language* + *machine-learning* subtitle generator. It started as a Japanese→English tool
 for a personal video collection and grew into a general one: the language of every stretch of speech is detected,
@@ -31,8 +33,8 @@ mixture-of-experts** (`gemma4:26b`, 18 GB on disk) with only as many of its 30 l
 run from system RAM by Ollama. Because only ~4B of its parameters are active per token, it stays fast with most of
 it off the card — generation at 84 tok/s with 24 layers resident, 51 with 16, 40 with 8 (short prompts, measured
 on a 24 GB card limited to those splits) — and it translates almost as well as the 31B (chrF++ 30.2 against 31.0
-on the same clip and reference; the dense 12B scores 29.0) and reads Thai, Chinese and Japanese bitmaps exactly as
-well (76 % / 93.8 against the 31B's 77 % / 93.7). End to end, prompts included, the ten-minute test clip
+on the same clip and reference; the dense 12B scores 29.0) and matched the 31B on the Thai OCR benchmark (76 % /
+93.8 against 77 % / 93.7). One clip, one reference, one script: enough to choose a default, not a general ranking. End to end, prompts included, the ten-minute test clip
 translated into Thai in **68 s with the `16gb` split** (22 layers), 31 s with the 26B fully on a 24 GB card, and
 103 s with the 31B. The price is system RAM for the part that is not on the card: a machine without it gets the
 dense small model instead (the `-dense` profiles, chosen automatically when the RAM is short).
@@ -47,7 +49,7 @@ dense small model instead (the `-dense` profiles, chosen automatically when the 
 | **language detection, per stretch** | yes | yes | yes | yes |
 | **embedded text subtitles** (used before the audio) | yes | yes | yes | yes |
 | **bitmap subtitles, Latin / Greek / Cyrillic** (tesseract, CPU) | yes | yes | yes | yes |
-| **bitmap subtitles, Thai / Chinese / Japanese / Korean / stacked scripts** (vision model) | yes — the 31B | yes — the 26B, as good as the 31B | yes — the 26B (`12gb-dense`: the 12B, usable but weaker) | yes — the 26B, slower (`8gb-dense`: **no**, the E4B cannot read them; those tracks are left alone and the audio transcribed) |
+| **bitmap subtitles, Thai / Chinese / Japanese / Korean / stacked scripts** (vision model) | yes — the 31B | yes — the 26B, which matched the 31B on the Thai benchmark | yes — the 26B (`12gb-dense`: the 12B, usable but weaker) | yes — the 26B, slower (`8gb-dense`: **no**, the E4B cannot read them; those tracks are left alone and the audio transcribed) |
 | **speaker diarization** (CPU) | yes | yes | yes | yes |
 | **terminology pass** (names rendered once per film) | yes | yes | yes | yes |
 | **bench / lidbench / ocrbench** | yes | yes | yes | yes |
@@ -58,6 +60,19 @@ Only the `full` profile has been run on its own hardware for weeks; the others r
 card. `mlsubgen bench` shows what any choice costs on your own material before a long run.
 
 ## What it does
+
+The one idea underneath everything: **use the best evidence already in the file before inferring anything.** For
+each subtitle language you ask for, in this order:
+
+```
+a text subtitle track in that language           → used as is; nothing written
+a bitmap (PGS) track in that language            → OCR'd into the .srt — the real subtitles
+a text track in the spoken language              → the transcript; translated, no listening
+a bitmap track in the spoken language            → OCR'd, then the transcript; translated
+nothing to read                                  → listen: language detection, two speech recognisers, translation
+```
+
+Every step has a gate that drops evidence which is too thin or too muddled, and falls through to the next.
 
 - **Language detection per stretch of speech**, not per file: a Japanese programme with English interview
   segments is handled as both. Whisper's language probabilities, Qwen3-ASR's own decode and the script of the
@@ -123,6 +138,8 @@ mlsubgen config targets th,de    # save the default languages (the web form has 
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
 mlsubgen pull                    # download what a default run needs;  pull gemma4 · pull some/tag:latest · pull --all
 mlsubgen jobs                    # the queue;  mlsubgen log ID · pause ID · resume ID · cancel ID · retry ID
+mlsubgen why FILE                # where each subtitle file came from: track or engines, detection, speakers, terms, translator
+mlsubgen tracks FILE             # the audio and subtitle tracks, with which bitmap tracks OCR can read
 mlsubgen help                    # the one-screen guide;  mlsubgen help run  for every option
 ```
 
@@ -151,6 +168,7 @@ files that can be re-queued with the language forced.
 | merge | the translator LLM reconciles the two transcripts where they differ (chunks that agree need no LLM) |
 | word ↔ speaker | *with `--speakers`*: each aligned word takes the turn that covers it clearly, or stays unlabelled |
 | cues | sentence ends, pauses, speaker changes, length limits, hallucination filters (evidence-gated) |
+| terms | per target, once per film: the recurring names and terms of the transcript are found (a script heuristic plus one LLM pass) and rendered once — standard transliteration for names, the established form for titles — into the glossary every window reads, so a character is spelt the same way in the last scene as in the first; your own `--glossary` wins. `--terms off` skips it |
 | translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, register rules, speaker continuity, retry and per-line fallback |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps → `<video>.<lang>.srt` |
 
@@ -283,6 +301,43 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 
 Everything else (chunk lengths, cue limits, line widths, reading speeds, hallucination patterns) is in
 `mlsubgen/config.py` and documented there.
+
+## Questions a sceptical reader should ask
+
+**Why two speech recognisers and an LLM, rather than one good one?** Because they fail differently. An LLM
+decoder (Qwen3-ASR) can go silent over music; a whisper window can drop out or hallucinate a stock phrase; each
+hears names and numbers the other misses. Where the two transcripts agree closely — most chunks — no LLM is
+involved and nothing is slower than one engine. Where they differ, the translator model reconciles them, and a
+chunk one engine returned thin is decoded again by the other. Whether that is worth the compute on *your*
+material is a measurement, not a promise: `mlsubgen bench … --asr qwen`, `--asr whisper` and the default dual
+mode on the same clip, with a reference `.srt`, give a chrF++ for each.
+
+**Does the vision-model OCR make things up?** It can: a generative model's failure is plausible text that is not
+on the screen, which is worse than tesseract's symbol salad because it looks right. Four things stand against
+it. The prompt asks for the visible characters only — no correcting, no paraphrasing, no inferred words, no
+translation. The OCR gate refuses a track whose text is not in the expected script, is mostly symbols, repeats
+one line, contains replacement characters, carries lines of digits and symbols, or describes the image; a
+refused track is left alone and the audio is transcribed. Every engine–script pairing in the table above was
+measured against a text track of the same film before it was allowed to be a default. And `mlsubgen why VIDEO`
+tells you afterwards which track, engine and gate verdict a subtitle file came from. The risk is reduced, not
+gone; a disagreement check between two engines is the obvious next step and is not built.
+
+**Do the 8, 12 and 16 GB profiles work on real cards?** They were measured on a 24 GB RTX A5000 limited to their
+layer splits, which fixes the memory and the quality but not the speed: a real card's CPU and RAM carry the rest
+of the 26B, and a slower machine will be slower than the figures in the table. Nothing about correctness depends
+on the card. A report from a 3060, a 4070, a 4060 Ti 16 GB or a 3070 is the most useful issue this repository
+can receive.
+
+**How were the numbers made, and what do they leave out?** Each measurement names its material and its
+reference: one clip of one anime with a fansub reference for translation and cue boundaries; three multilingual
+films against their forced subtitle tracks for language detection; five films against their own text tracks for
+OCR. They are enough to choose between alternatives on the same material, which is what they were used for.
+They are not a benchmark of the field, and a different film can rank the alternatives differently — which is why
+`bench`, `lidbench` and `ocrbench` exist, so the same comparison can be run on yours.
+
+**What stays local?** Everything except the one-time model downloads (Hugging Face for the speech models, GitHub
+for the speaker models, Ollama for the translators). Set `HF_HUB_OFFLINE=1` after that and the speech side makes
+no network calls at all; Ollama and the web UI listen on the addresses you give them.
 
 ## Known limitations
 
