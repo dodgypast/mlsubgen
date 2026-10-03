@@ -13,6 +13,36 @@ translated by a local LLM, and the only things written are the `.srt` files besi
 for a personal video collection and grew into a general one: the language of every stretch of speech is detected,
 each stretch is transcribed with that language forced, and each of 45 target languages gets its own file.
 
+## Hardware
+
+| | needed | notes |
+|---|---|---|
+| **GPU** | an NVIDIA card with **8 GB** of memory at least; **24 GB** for the full-quality setup | CUDA only — no AMD, Apple or Windows path, because the ASR engines are CUDA builds. The card never holds the speech engines and the translator at the same time (a run transcribes a round of files, frees the card, then translates), so it needs to hold only the larger stage. Developed and measured on an RTX A5000 (24 GB); the smaller profiles run the same code with less resident and are lightly tested |
+| **RAM** | **16 GB** minimum, **32 GB** recommended | models are read through RAM on their way to the card; four tesseract processes run at once during OCR; on a small card Ollama spills part of a translator into RAM when it does not fit |
+| **CPU** | 4 cores or more | speaker diarization, bitmap decoding and tesseract OCR run on the CPU, not the GPU |
+| **Disk** | **30–65 GB** depending on the profile | Docker image ~14 GB (or the venv ~6 GB on the host) · ASR models ~8 GB (Qwen3-ASR + its aligner, whisper large-v3) · translators in Ollama: `full` ≈ 37 GB (two models), `12gb` 7 GB, `8gb` 6 GB · speaker models 33 MB · tesseract packs ~0.5 GB · work files and OCR cache a few MB per video; the temporary wav is ~120 MB per hour of video and deleted after use |
+| **OS / tools** | Linux; `ffmpeg`/`ffprobe`; [Ollama](https://ollama.com) on the same host; Docker with the NVIDIA Container Toolkit, or Python 3.12 + [uv](https://docs.astral.sh/uv/) for a host install | tested on Arch-family (CachyOS) and Debian-family systems |
+
+The GPU's memory picks a **hardware profile** at start (`mlsubgen models` shows it; `MLSUBGEN_PROFILE=12gb` or
+`--profile 12gb` forces one; `mlsubgen pull` downloads what the active profile needs). What each profile gives:
+
+| | `full` — 20 GB and up | `12gb` — 11 to 20 GB | `8gb` — under 11 GB |
+|---|---|---|---|
+| **cards, for example** | RTX 3090 / 4090 / 5090, RTX A5000 / A6000, L4 (24 GB) | RTX 3060 12 GB, 4070 / 4070 Ti / 4080 (12–16 GB), 4060 Ti 16 GB, RTX A4000 | RTX 3050 / 3070 / 4060 (8 GB), 2070 / 2080 |
+| **speech recognition** | both engines resident, whisper in float16 (≈ 10 GB) | both engines resident, whisper in int8 (≈ 8 GB) | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB); the same two engines, slower per file |
+| **translation** | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair (17–19 GB each) | `gemma4:12b-it-qat` (7.2 GB) for every pair — noticeably weaker, most of all Japanese → English | `gemma4:e4b-it-qat` (6.1 GB) for every pair — weaker again |
+| **language detection, per stretch** | yes | yes | yes |
+| **embedded text subtitles** (used before the audio) | yes | yes | yes |
+| **bitmap subtitles, Latin / Greek / Cyrillic** (tesseract, CPU) | yes | yes | yes |
+| **bitmap subtitles, Thai / Chinese / Japanese / Korean / stacked scripts** (vision model) | yes — `gemma4:31b` reads them | yes — `gemma4:12b`, measured usable but weaker | **no** — the E4B does not read them well enough; those tracks are left alone and the audio is transcribed |
+| **speaker diarization** (CPU) | yes | yes | yes |
+| **terminology pass** (names rendered once per film) | yes | yes (with the 12B) | yes (with the E4B) |
+| **bench / lidbench / ocrbench** | yes | yes | yes |
+
+On a 16 GB card the `12gb` profile applies; `-t gemma4-26b` tries the 26B-A4B mixture-of-experts translator
+(16–19 GB) there, with Ollama offloading part of it to the CPU. `mlsubgen bench` shows what any of these choices
+costs on your own material before a long run.
+
 ## What it does
 
 - **Language detection per stretch of speech**, not per file: a Japanese programme with English interview
@@ -39,32 +69,6 @@ each stretch is transcribed with that language forced, and each of 45 target lan
 - **A job queue with a web UI**: jobs run one at a time on the GPU, survive reboots (every finished stage and
   every decoded ASR chunk is checkpointed), and can be paused and resumed. Pausing a job keeps it out of the
   queue across reboots until you resume it.
-
-## Requirements
-
-| | |
-|---|---|
-| OS | Linux (tested on Arch-family and Debian-family). No AMD, Apple or Windows path: the ASR engines are CUDA builds. |
-| GPU | NVIDIA. **8 GB** is the floor; **24 GB** gets the full-quality setup. The hardware profile (below) adapts the pipeline to what the card has. |
-| Translator | [Ollama](https://ollama.com) on the same host (or any OpenAI-compatible server) with a model pulled — see Translators. |
-| Tools | `ffmpeg` / `ffprobe`; Python 3.12 and [uv](https://docs.astral.sh/uv/) for the host install, or Docker with the NVIDIA Container Toolkit. |
-| Disk | ~8 GB of models downloaded from Hugging Face on first run, plus the translator in Ollama (17–19 GB each). |
-
-The ASR engines and the translator never share the GPU: a run transcribes a round of files first, frees the
-card, then translates the round. So the card only has to hold the bigger of the two stages, and a **hardware
-profile**, picked from the GPU's memory at start, sets what each stage loads:
-
-| profile | GPU | ASR stage | translators |
-|---|---|---|---|
-| `full` | 20 GB and up | both engines resident (≈ 10 GB) | `qwen3.8:27b` for Japanese → English, `gemma4:31b-it-qat` for every other pair (17–19 GB each) |
-| `12gb` | 11–20 GB | both engines resident, whisper in int8 (≈ 8 GB) | `gemma4:12b-it-qat` (7.2 GB) for every pair |
-| `8gb` | under 11 GB | one engine on the card at a time (≈ 5 GB, then ≈ 2.5 GB) | `gemma4:e4b-it-qat` (6.1 GB) for every pair |
-
-`mlsubgen models` shows the active profile; `MLSUBGEN_PROFILE=12gb` (or `--profile 12gb` on a run) forces one, and
-`mlsubgen pull` downloads what the active profile needs. The smaller translators are noticeably weaker, most of all
-for Japanese → English; `mlsubgen bench` shows by how much on your own material. On a 16 GB card the `12gb` profile
-applies; `-t gemma4-26b` tries the 26B-A4B mixture-of-experts (16–19 GB) there, with Ollama offloading part of it
-to the CPU.
 
 ## Install — Docker
 
@@ -260,7 +264,7 @@ retries it). `--keep-work` keeps the ASR cache to re-translate with another mode
 | `MLSUBGEN_TARGETS` | `en` | default subtitle languages — a saved setting (`mlsubgen config targets …` or the web form's *make these the default*, kept in `settings.json` under `MLSUBGEN_HOME`) beats it; `--target` on a run beats both. English need not be among them: every route, rule and file name is per target. |
 | `MLSUBGEN_LLM_URL` | `http://127.0.0.1:11434` | the translator server |
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
-| `MLSUBGEN_PROFILE` | `auto` | `full`, `12gb` or `8gb` — see Requirements |
+| `MLSUBGEN_PROFILE` | `auto` | `full`, `12gb` or `8gb` — see Hardware |
 | `HF_HUB_OFFLINE` | `0` | `1` after the models are downloaded: no contact with huggingface.co |
 
 Everything else (chunk lengths, cue limits, line widths, reading speeds, hallucination patterns) is in
