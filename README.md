@@ -1,4 +1,4 @@
-# mlsubgen — subtitles for videos, entirely on your own machine
+# mlsubgen — subtitles in 45 languages for your videos, entirely on your own machine
 
 ```
 cd /some/folder/of/videos
