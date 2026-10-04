@@ -2104,6 +2104,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
     he = _tm.heuristic_candidates(en_lines, "en")
     assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he
+    he2 = _tm.heuristic_candidates(["- Yeah? What about Emily?", "Hey, Yeah, Em - You know what", "Oh God, April. - What?"], "en")
+    assert "Yeah" not in he2 and "What" not in he2 and "You" not in he2 and "Oh" not in he2 and he2.get("Emily") == 1 and he2.get("April") == 1, he2
     # (a name at a sentence start is not counted by the heuristic — the LLM pass is what finds those)
     assert _tm.build_glossary({"ミサエ": "มิซาเอะ", "ヒロシ": "ฮิโรชิ"}, {"ミサエ": "มิซาเอ"}) == {"ミサエ": "มิซาเอ", "ヒロシ": "ฮิโรชิ"}
     assert _tm._chunks(["a" * 100] * 50, 1000) and sum(len(p) for p in _tm._chunks(["a" * 100] * 50, 1000)) >= 5000

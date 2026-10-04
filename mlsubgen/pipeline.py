@@ -602,7 +602,14 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
     src = max(langs, key=langs.get)
     texts = [c.ja for c in cues if c.lang == src and c.ja]
     entry = data.setdefault("terms", {}).setdefault(key, {})
-    client = pool.use(force_model or route(src, target))
+    # extracting and rendering terms is a chat task, not a translation: a translation-only model (TranslateGemma)
+    # translates the question and nothing parses (2026-10-04: "60 terms, 0 rendered" for 44 languages). So the
+    # pair's default route does this stage even when a translator is forced for the subtitles themselves.
+    chat_capable = lambda name: config.TRANSLATORS[name].prompt_style != "translategemma"     # noqa: E731
+    chosen = force_model or route(src, target)
+    if not chat_capable(chosen):
+        chosen = route(src, target) if chat_capable(route(src, target)) else config.DEFAULT_TRANSLATOR
+    client = pool.use(chosen)
     t0 = time.time()
     if entry.get("version") != config.TERMS_VERSION or "terms" not in entry:
         heuristic = tm.heuristic_candidates(texts, src)

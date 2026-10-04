@@ -21,6 +21,17 @@ from .segment import Cue
 
 _KATAKANA = re.compile(r"[ァ-ヴー]{2,}")
 _CAPITALISED = re.compile(r"(?<![.!?]\s)(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:\s[A-ZÀ-Ý][a-zà-ÿ]{2,})?")
+# capitalised English words that are not names: interjections, pronouns, question words, days — the capitalised-word
+# heuristic sees them after a dialogue dash or a question mark mid-cue (2026-10-04: "Yeah", "You", "What" were among
+# the six most frequent "terms" of a film, crowding the cap)
+_ENGLISH_STOP = {"Yeah", "Yes", "You", "What", "Why", "How", "Who", "When", "Where", "Okay", "Hey", "Oh", "Well", "Look",
+                 "Come", "Wait", "Thanks", "Thank", "Sorry", "Please", "Right", "Sure", "Good", "Great", "God", "Jesus",
+                 "Mom", "Dad", "Mommy", "Daddy", "Honey", "Baby", "Sir", "Miss", "Mister", "Doctor", "Hello", "Goodbye",
+                 "Bye", "Hi", "Mister", "Mrs", "Mr", "Ms", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                 "Saturday", "Sunday", "Christmas", "Easter", "The", "And", "But", "Then",
+                 # months are deliberately NOT here: April, May and June are names (April is a lead in Definitely, Maybe)
+                 "Now", "Just", "Maybe", "Really", "Nothing", "Something", "Everything", "Nobody", "Somebody", "Everybody",
+                 "Stop", "Go", "Get", "Let", "Listen", "Excuse", "Fine", "Love", "Dude", "Man", "Guys", "Hmm", "Uh", "Um"}
 _COMMON_KATAKANA = {"ドア", "テレビ", "ママ", "パパ", "トイレ", "バス", "タクシー", "コーヒー", "ビール", "ゲーム", "アイス", "カメラ",
                     "ホテル", "レストラン", "ニュース", "メール", "パソコン", "スマホ", "ピザ", "ケーキ", "サラダ", "ジュース",
                     "ダメ", "チーズ", "ハチミツ", "ビデオ", "バイト", "デート", "プール", "ベッド", "ソファ", "ドライブ", "ペット",
@@ -64,6 +75,8 @@ def heuristic_candidates(texts: list[str], lang: str) -> dict[str, int]:
     elif lang in ("en", "de", "fr", "es", "it", "pt", "nl", "sv", "da", "no", "fi", "pl", "cs", "hu", "ro", "tr", "id", "ms", "tl", "vi", "ca", "hr", "sk", "sl", "lt", "lv", "et"):
         for t in texts:
             for m in _CAPITALISED.findall(". " + t):           # a line start is a sentence start: capitalised anyway
+                if m in _ENGLISH_STOP or m.split()[0] in _ENGLISH_STOP:
+                    continue
                 counts[m] = counts.get(m, 0) + 1
     return counts
 
