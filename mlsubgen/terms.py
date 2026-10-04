@@ -28,7 +28,8 @@ _ENGLISH_STOP = {"Yeah", "Yes", "You", "What", "Why", "How", "Who", "When", "Whe
                  "Come", "Wait", "Thanks", "Thank", "Sorry", "Please", "Right", "Sure", "Good", "Great", "God", "Jesus",
                  "Mom", "Dad", "Mommy", "Daddy", "Honey", "Baby", "Sir", "Miss", "Mister", "Doctor", "Hello", "Goodbye",
                  "Bye", "Hi", "Mister", "Mrs", "Mr", "Ms", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-                 "Saturday", "Sunday", "Christmas", "Easter", "The", "And", "But", "Then",
+                 "Saturday", "Sunday", "Christmas", "Easter", "The", "And", "But", "Then", "That", "This", "There",
+                 "Here", "Where", "Which", "Because", "Anyway", "Also", "Still", "Only", "Never", "Always", "Totally",
                  # months are deliberately NOT here: April, May and June are names (April is a lead in Definitely, Maybe)
                  "Now", "Just", "Maybe", "Really", "Nothing", "Something", "Everything", "Nobody", "Somebody", "Everybody",
                  "Stop", "Go", "Get", "Let", "Listen", "Excuse", "Fine", "Love", "Dude", "Man", "Guys", "Hmm", "Uh", "Um"}

@@ -2141,6 +2141,12 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
     he = _tm.heuristic_candidates(en_lines, "en")
     assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he
+    # caption remnants in an ordinary track (2026-10-04): uppercase labels and tags go, lowercase dialogue stays
+    from .subs import clean_captions
+    assert clean_captions("MAYA: (LAUGHING) You wanted to be President?") == "You wanted to be President?"
+    assert clean_captions("[DOOR CLOSES]\nWill, wait.") == "Will, wait." and clean_captions("♪ ♪") == ""
+    assert clean_captions("Note: he said (quietly) that it was 18:30.") == "Note: he said (quietly) that it was 18:30."
+    assert clean_captions("WILL: I'm fine.\n- (SIGHS) Really?") == "I'm fine.\n- Really?"
     he2 = _tm.heuristic_candidates(["- Yeah? What about Emily?", "Hey, Yeah, Em - You know what", "Oh God, April. - What?"], "en")
     assert "Yeah" not in he2 and "What" not in he2 and "You" not in he2 and "Oh" not in he2 and he2.get("Emily") == 1 and he2.get("April") == 1, he2
     # (a name at a sentence start is not counted by the heuristic — the LLM pass is what finds those)

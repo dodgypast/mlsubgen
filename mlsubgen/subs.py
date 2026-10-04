@@ -321,13 +321,35 @@ def is_sdh(track) -> bool:
     return bool(re.search(r"sdh|hearing|\bcc\b|closed caption", getattr(track, "title", "") or "", re.I))
 
 
+# caption remnants in a track that is NOT marked SDH (2026-10-04: a Blu-ray's English text track carried
+# "MAYA: (LAUGHING) You wanted to be President?" — the label became a term and the tag reached the French as
+# "MAYA : (RIANT)"). Only the unmistakable forms are stripped from an ordinary track: an UPPERCASE speaker label,
+# an UPPERCASE bracketed sound tag, a music-only line. "Note: …" and "(he said)" in lowercase are dialogue and stay.
+_CAP_LABEL = re.compile(r"^\s*[A-ZÀ-Ý][A-ZÀ-Ý .'\-]{1,24}:\s+")
+_CAP_TAG = re.compile(r"\s*[\[\(][A-ZÀ-Ý][A-ZÀ-Ý .,'\-]{1,40}[\]\)]\s*")
+
+
+def clean_captions(text: str) -> str:
+    """Caption remnants out of an ordinary (non-SDH) cue: uppercase labels and tags, music-only lines."""
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or _SDH_MUSIC.match(s):
+            continue
+        s = _CAP_LABEL.sub("", s, count=1)
+        s = _CAP_TAG.sub(" ", s).strip()
+        if s and not _SDH_WHOLE.match(s):
+            out.append(s)
+    return "\n".join(out)
+
+
 def cues_from_track(srt_path: Path, lang: str = "ja", sdh: bool = False) -> list[Cue]:
     """Subtitle file → source cues with the track's own timings. Display lines are joined without spaces for
     Japanese/Chinese/Thai and with spaces otherwise; CC speaker labels and sound-effect-only lines go."""
     joiner = "" if lang in ("ja", "zh", "yue", "th", "km", "lo", "my") else " "    # scripts without word spaces
     cues: list[Cue] = []
     for c in read_srt(srt_path):
-        body = clean_sdh(c.text) if sdh else c.text
+        body = clean_sdh(c.text) if sdh else clean_captions(c.text)
         parts = [clean_ja_line(line) for line in body.splitlines()]
         text = joiner.join(p for p in parts if p).strip()
         if text and c.end > c.start:

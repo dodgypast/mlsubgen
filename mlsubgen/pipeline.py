@@ -602,6 +602,14 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
         langs[c.lang] = langs.get(c.lang, 0) + 1
     src = max(langs, key=langs.get)
     texts = [c.ja for c in cues if c.lang == src and c.ja]
+    # a pair whose translator takes no glossary (TranslateGemma's fixed prompt) gets no terms pass: the rendering
+    # would be unused (2026-10-04: six languages, 6 s each, and "New York → Uus-York" for Finnish, never read)
+    from .translate import route as _route
+    _langs = {}
+    for c in cues:
+        _langs[c.lang] = _langs.get(c.lang, 0) + 1
+    if _langs and config.TRANSLATORS[force_model or _route(max(_langs, key=_langs.get), target)].prompt_style == "translategemma":
+        return {}                                      # its prompt takes no glossary at all, the user's included
     entry = data.setdefault("terms", {}).setdefault(key, {})
     # extracting and rendering terms is a chat task, not a translation: a translation-only model (TranslateGemma)
     # translates the question and nothing parses (2026-10-04: "60 terms, 0 rendered" for 44 languages). So the
