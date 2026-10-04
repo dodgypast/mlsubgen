@@ -37,7 +37,9 @@ SHEET_PROMPT = ("Below is the dialogue of {genre}, in {language}. List the recur
                 "\"role\" (a few words), and \"relations\": a list of {{\"to\": <other character's name>, "
                 "\"relation\": <e.g. \"father\", \"daughter\", \"wife\", \"boss\", \"employee\", \"friend\", "
                 "\"stranger\">, \"status\": <\"higher\", \"equal\" or \"lower\" — the speaker's standing relative to "
-                "that person>}}. Answer with a JSON array only, no prose.\n\n{text}")
+                "that person>}}. State only what the dialogue itself shows or makes obvious; where it does not, write "
+                "\"?\" for gender, \"unknown\" for age, and leave the relation out rather than guess — a wrong guess "
+                "here would be applied consistently to the whole film. Answer with a JSON array only, no prose.\n\n{text}")
 
 RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:\n{sheet}\n\n"
                  "Write the rules a {target} subtitle translator must follow so that every character sounds right and "

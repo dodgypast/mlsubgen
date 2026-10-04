@@ -172,13 +172,21 @@ def cmd_languages(a: argparse.Namespace) -> int:
     """The subtitle languages: every code is a target (the translator writes it) and a source (decoded by Qwen3-ASR
     where its aligner covers the language, by whisper elsewhere)."""
     defaults = set(config.DEFAULT_TARGETS.split(","))
-    print(f"{'code':<5} {'language':<22} {'native':<18} {'ASR':<8} default")
+    from .translate import route as _route
+    print(f"{'code':<5} {'language':<22} {'native':<18} {'ASR':<8} {'translator':<16} default")
     for code, name in sorted(config.TARGET_LANGS.items(), key=lambda kv: kv[1]):
         engine = "qwen" if code in config.ALIGNER_LANGS else "whisper"
-        print(f"{code:<5} {name:<12} {config.NATIVE_NAMES.get(code, ''):<18} {engine:<8} {'yes' if code in defaults else ''}")
+        try:
+            tl = _route("*", code) if code != "en" else _route("ja", "en") + "/" + _route("*", "en")
+        except KeyError:
+            tl = "?"
+        print(f"{code:<5} {name:<22} {config.NATIVE_NAMES.get(code, ''):<18} {engine:<8} {tl:<16} {'yes' if code in defaults else ''}")
     print(f"\n{len(config.TARGET_LANGS)} languages · defaults: {config.DEFAULT_TARGETS} (MLSUBGEN_TARGETS, or --target per run)")
-    print(f"known but not offered as targets yet (the translator measured below shippable, 2026-10-03; still read as sources): "
-          + ", ".join(config.LANG_NAMES[c] for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
+    print(f"translator: the route for this profile ({getattr(config, 'PROFILE', 'auto')}) — `-t NAME` forces one for every pair; the foreign-script guard "
+          f"applies to every translation; `mlsubgen why FILE` says what a finished file actually got")
+    print(f"withheld as targets (measured below shippable; still read as sources): "
+          + ", ".join(f"{config.LANG_NAMES[c]} ({config.WITHHELD_REASON.get(c, 'measured below shippable')})"
+                      for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
     return 0
 
 

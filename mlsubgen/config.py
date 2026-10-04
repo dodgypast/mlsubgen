@@ -62,6 +62,7 @@ SOURCE_LANGS = set(LANG_NAMES)
 # otherwise). Greek stays withheld: the choice there is between the 31B's grammar errors and TranslateGemma's
 # gender slashes, and the character sheet has to settle that first.
 UNSUPPORTED_TARGETS = {"el"}
+WITHHELD_REASON = {"el": "the 31B's grammar errors vs TranslateGemma's gender slashes — returns once the character sheet is measured on it (2026-10-04)"}
 TARGET_LANGS = {c: n for c, n in LANG_NAMES.items() if c not in UNSUPPORTED_TARGETS}
 # ── Default subtitle languages ───────────────────────────────────────────────────────────────────────────
 # Precedence: --target on a run  >  settings.json (set from the CLI: `mlsubgen config targets en,th`, or the web
