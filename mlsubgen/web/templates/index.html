@@ -3,6 +3,7 @@
 <section class="card">
   <h2>New job</h2>
   <form id="newjob" method="post" action="/api/jobs">
+    <h3 class="group">What</h3>
     <div class="row">
       <label>Folder or file(s)</label>
       <input name="path" id="path" placeholder="/…" value="{{ last_folder }}" spellcheck="false">
@@ -16,7 +17,7 @@
       <ul id="files" class="files"></ul>
     </div>
     <div id="picked"></div>
-    <div class="row wrap">
+    <div class="grid2">
       <label>Subtitles in</label>
       <details class="dropdown" id="targets-dd">
         <summary><span id="targets-summary">{% for code, name, native in langs if code in default_targets %}{{ name }}{% if not loop.last %}, {% endif %}{% endfor %}</span> <span class="caret">&#9662;</span></summary>
@@ -33,64 +34,70 @@
       </details>
       <label>Spoken language</label>
       <select name="source" title="auto = detect per stretch of speech; pick one only to override the detector">
-        <option value="auto">auto-detect (per stretch of speech)</option>
+        <option value="auto">auto-detect — per stretch of speech</option>
         {% for code, name in sources %}<option value="{{ code }}">force {{ name }}</option>{% endfor %}
       </select>
     </div>
-    <div class="row wrap">
+
+    <h3 class="group">How <span class="muted">— the defaults are the measured choices; change them for a reason</span></h3>
+    <div class="grid2">
       <label>Hardware profile</label>
-      <select name="profile" id="profile" title="auto = by the card's memory; a chosen profile sets the translator sizes, the routes and which languages are offered — the tick boxes above follow it">
+      <select name="profile" id="profile" title="auto = by the card's memory. A chosen profile sets the translator sizes, the routes and which languages are offered — the tick boxes above follow it.">
         <option value="auto">auto — {{ active_profile }} on this card ({{ vram_gb }} GB)</option>
         {% for p, desc in profiles %}<option value="{{ p }}">{{ p }} — {{ desc }}</option>{% endfor %}
       </select>
       <label>Translator</label>
-      <select name="translator" title="by language pair unless forced">
-        <option value="auto">auto — by language pair ({% for pair, m in routes %}{{ pair }} {{ m }}{% if not loop.last %}, {% endif %}{% endfor %})</option>
+      <select name="translator" title="auto = the route for each language pair on this profile: {% for pair, m in routes %}{{ pair }} {{ m }}{% if not loop.last %} · {% endif %}{% endfor %}">
+        <option value="auto">auto — by language pair (the measured routes)</option>
         {% for t in translators %}<option value="{{ t }}">force {{ t }} for every pair</option>{% endfor %}
       </select>
-      <label>ASR engine</label>
-      <select name="asr" title="dual = both engines on every chunk, reconciled by the translator LLM">
-        <option value="dual">dual — Qwen3-ASR + whisper large-v3 on every chunk, the LLM reconciles (default)</option>
-        <option value="auto">auto — one engine per chunk: Qwen where its aligner covers the language, whisper elsewhere</option>
+      <label>Speech recognition</label>
+      <select name="asr" title="dual = Qwen3-ASR and whisper large-v3 both decode every chunk and the translator LLM reconciles them where they differ (default). auto = one engine per chunk, Qwen where its aligner covers the language.">
+        <option value="dual">dual — both engines, the LLM reconciles (default)</option>
+        <option value="auto">auto — one engine per chunk</option>
         <option value="qwen">Qwen3-ASR only</option>
         <option value="whisper">whisper large-v3 only</option>
       </select>
       <label>Embedded subtitles</label>
-      <select name="subs">
-        <option value="auto">auto — an embedded target language is left alone; any other full text track (the spoken language's first) is the transcript</option>
-        <option value="ja">ja — ignore embedded target tracks, make our own translation</option>
+      <select name="subs" title="auto = a text or bitmap track already in a target language is used as is; any other full track becomes the transcript; the audio is transcribed only when nothing covers it.">
+        <option value="auto">auto — use what the file already has (default)</option>
+        <option value="ja">translate anyway — ignore embedded target tracks</option>
         <option value="ignore">ignore — always transcribe the audio</option>
       </select>
       <label>Speakers</label>
-      <select name="speakers" title="speaker diarization (CPU; pull the speaker models first): a speaker change closes a cue and the translator is told who is talking — labels never appear in the subtitles">
-        <option value="off">off</option>
+      <select name="speakers" title="speaker diarization on the CPU (pull the speaker models first): a speaker change closes a cue and the translator knows which lines share a voice — labels never appear in the subtitles. Off by default: on feature films the clustering fragments a cast.">
+        <option value="off">off (default)</option>
         <option value="auto">auto — find the speakers</option>
-        <option value="2">2 speakers</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option>
+        <option value="2">2 speakers</option><option value="3">3 speakers</option><option value="4">4 speakers</option><option value="5">5 speakers</option><option value="6">6 speakers</option><option value="8">8 speakers</option>
       </select>
       <label>Batch</label>
-      <input name="batch" value="10" size="3" title="files per ASR-then-translate round; 0 = all ASR first">
+      <div class="inline-ctl"><input name="batch" value="10" size="4" title="files per transcribe-then-translate round — the card swaps from the speech engines to the translator once per round; 0 = transcribe everything first"> <span class="muted">files per round</span></div>
     </div>
-    <div class="row wrap checks">
-      <label><input type="checkbox" name="overwrite" value="1"> --overwrite <span class="muted">redo files that already have the .srt</span></label>
-      <label><input type="checkbox" name="keep_work" value="1"> --keep-work <span class="muted">keep the ASR cache after the .srt</span></label>
-      <label><input type="checkbox" name="keep_source" value="1"> --keep-source <span class="muted">also write the transcript in the spoken language</span></label>
-      <label><input type="checkbox" name="no_recursive" value="1"> --no-recursive</label>
-      <label><input type="checkbox" name="force_translate" value="1"> --force-translate</label>
-    </div>
-    <div class="row wrap">
+
+    <h3 class="group">Hints <span class="muted">— optional, they only make the result better</span></h3>
+    <div class="grid2">
       <label>Context</label>
-      <input name="context" placeholder="what the programme is about, names, terms (biases ASR and translation)">
+      <input name="context" placeholder="what the programme is about, names, terms — biases both the speech recognition and the translation">
       <label>Genre</label>
-      <input name="genre" placeholder="{{ default_genre }}">
-    </div>
-    <div class="row">
+      <input name="genre" placeholder="{{ default_genre }}" title="sets the register: a slapstick family anime, a courtroom drama, a cooking show …">
       <label>Glossary</label>
-      <textarea name="glossary" rows="2" placeholder="日本語&#9;English — one pair per line (tab or =)"></textarea>
+      <textarea name="glossary" rows="2" class="span" placeholder="日本語&#9;English — one pair per line (tab or =); pins names and terms, and wins over the terminology pass"></textarea>
     </div>
-    <div class="row">
-      <label>Extra options</label>
-      <input name="extra" placeholder="anything else for `mlsubgen run`, e.g. --audio-track 1 --window 30" spellcheck="false">
-    </div>
+
+    <details class="more">
+      <summary class="muted">More options</summary>
+      <div class="row wrap checks">
+        <label><input type="checkbox" name="overwrite" value="1"> --overwrite <span class="muted">redo files that already have the .srt</span></label>
+        <label><input type="checkbox" name="keep_work" value="1"> --keep-work <span class="muted">keep the ASR cache after the .srt (re-translate later with another model)</span></label>
+        <label><input type="checkbox" name="keep_source" value="1"> --keep-source <span class="muted">also write the transcript in the spoken language</span></label>
+        <label><input type="checkbox" name="no_recursive" value="1"> --no-recursive <span class="muted">this folder only</span></label>
+        <label><input type="checkbox" name="force_translate" value="1"> --force-translate <span class="muted">translate even cues already in the target</span></label>
+      </div>
+      <div class="grid2">
+        <label>Extra options</label>
+        <input name="extra" class="span" placeholder="anything else for `mlsubgen run`, e.g. --audio-track 1 --window 30 --terms off --register off" spellcheck="false">
+      </div>
+    </details>
     <div class="row actions">
       <button type="submit">Queue</button>
       <button type="button" id="preview" class="secondary">Preview (dry run)</button>

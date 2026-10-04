@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}mlsubgen{% endblock %}</title>
-<link rel="stylesheet" href="/static/app.css?v={{ version }}">
+<link rel="stylesheet" href="/static/app.css?v={{ version }}-{{ asset_v }}">
 </head>
 <body>
 <header>
@@ -15,7 +15,7 @@
 <main>
 {% block body %}{% endblock %}
 </main>
-<script src="/static/app.js?v={{ version }}"></script>
+<script src="/static/app.js?v={{ version }}-{{ asset_v }}"></script>
 {% block script %}{% endblock %}
 </body>
 </html>

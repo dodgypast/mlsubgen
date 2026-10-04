@@ -356,8 +356,16 @@ def create_app() -> FastAPI:
             from fastapi.responses import Response
             return Response("mlsubgen: sign in", status_code=401, headers={"WWW-Authenticate": 'Basic realm="mlsubgen", charset="UTF-8"'})
 
+    # the static files are cached by the browser under their URL: a change to app.css or app.js within one version
+    # was invisible until a hard reload (2026-10-04), so their newest modification time is part of the URL
+    def asset_version() -> int:
+        try:
+            return int(max((HERE / "static" / f).stat().st_mtime for f in ("app.css", "app.js")))
+        except OSError:
+            return 0
+
     def render(request: Request, name: str, **ctx) -> HTMLResponse:
-        return templates.TemplateResponse(request, name, {"version": __version__, "roots": media_roots(), **ctx})
+        return templates.TemplateResponse(request, name, {"version": __version__, "roots": media_roots(), "asset_v": asset_version(), **ctx})
 
     # pages
     @app.get("/", response_class=HTMLResponse)

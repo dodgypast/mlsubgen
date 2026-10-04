@@ -17,7 +17,7 @@ h2 small { font-weight:400; font-size:13px; margin-left:8px; }
 .hidden { display:none; }
 .row { display:flex; align-items:center; gap:10px; margin:8px 0; }
 .row.wrap { flex-wrap:wrap; }
-.row label { color:var(--muted); min-width:110px; }
+.row label { color:var(--muted); min-width:130px; }
 .row.checks label { min-width:0; margin-right:14px; color:var(--fg); }
 .row.checks .muted { margin-left:4px; }
 label.inline { min-width:0 !important; color:var(--fg) !important; margin-right:6px; }
@@ -40,6 +40,25 @@ pre.log { max-height:60vh; }
 .pill.running, .pill.cancelling, .pill.pausing { background:#1f4a7a; color:#cfe3ff; }
 .pill.paused { background:#4a3f6a; color:#e6dcff; }
 
+/* the job form (2026-10-04): a two-pair grid instead of wrapping rows, so a long option text can no longer push a
+   control onto its own line; short option labels, the detail in tooltips; small group headings; rarely used
+   options folded away */
+.grid2 { display:grid; grid-template-columns: 130px minmax(0,1fr) 130px minmax(0,1fr); gap:8px 14px; align-items:center; margin:8px 0; }
+.grid2 > label { color:var(--muted); }
+.grid2 > select, .grid2 > input, .grid2 > textarea, .grid2 > .dropdown, .grid2 > .inline-ctl { min-width:0; width:100%; }
+.grid2 > select { text-overflow:ellipsis; }
+.grid2 > .span { grid-column: 2 / -1; }
+.grid2 > .inline-ctl { display:flex; align-items:center; gap:8px; }
+.grid2 > .inline-ctl input { width:5em; flex:0 0 auto; }
+.grid2 > .inline-ctl .muted { font-size:12px; }
+h3.group { margin:16px 0 4px; font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+h3.group .muted { font-weight:400; letter-spacing:0; text-transform:none; font-size:12px; }
+details.more { margin:12px 0 4px; }
+details.more > summary { cursor:pointer; font-size:13px; }
+details.more[open] > summary { margin-bottom:6px; }
+.dropdown summary { max-width:none; width:100%; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 130px minmax(0,1fr); } .grid2 > .span { grid-column: 2; } }
+
 /* the Models panel: a collapsed <details> with the heading in its summary (2026-10-01) */
 #models-panel > summary { cursor: pointer; }
 #models-panel > summary .inline-h2 { display: inline; margin: 0; }
@@ -52,12 +71,13 @@ pre.log { max-height:60vh; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dropdown summary::-webkit-details-marker { display: none; }
 .dropdown summary .caret { float: right; margin-left: .5em; opacity: .7; }
-.dropdown .menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 34em;
+.dropdown .menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: max(100%, 52em); max-width: 92vw;
   background: #1e1e2a; border: 1px solid #556; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.45); padding: .6em .8em; }
-.dropdown .menu-tools { display: flex; gap: .8em; align-items: center; margin-bottom: .4em; font-size: .9em; }
-.dropdown .menu-grid { display: grid; grid-template-columns: repeat(3, minmax(10em, 1fr)); gap: .15em 1em;
-  max-height: 22em; overflow-y: auto; }
-.dropdown .menu-grid label { display: block; white-space: nowrap; padding: .1em 0; }
+.dropdown .menu-tools { display: flex; flex-wrap: wrap; gap: .5em .8em; align-items: center; margin-bottom: .4em; font-size: .9em; }
+.dropdown .menu-tools button { white-space: nowrap; margin-left: 0; }
+.dropdown .menu-grid { display: grid; grid-template-columns: repeat(3, minmax(14em, 1fr)); gap: .15em 1em;
+  max-height: 22em; overflow-y: auto; overflow-x: hidden; }
+.dropdown .menu-grid label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: .1em 0; }
 .dropdown .menu-grid label .muted { font-size: .9em; }
 @media (max-width: 800px) { .dropdown .menu { min-width: 0; width: 92vw; } .dropdown .menu-grid { grid-template-columns: 1fr 1fr; } }
 .pill.done { background:#1f5a3a; color:#c9f5d9; }
