@@ -240,6 +240,8 @@ def apply_profile(name: str | None = None) -> str:
     WHISPER_COMPUTE = p["whisper_compute"]
     ASR_SEQUENTIAL = p["asr_sequential"]
     OLLAMA_NUM_GPU = p.get("num_gpu")
+    if os.environ.get("MLSUBGEN_NUM_GPU"):                   # measurement override: layers on the card for every Ollama request
+        OLLAMA_NUM_GPU = int(os.environ["MLSUBGEN_NUM_GPU"])
     if not os.environ.get("MLSUBGEN_OCR_VLM"):
         OCR_VLM_MODEL = p["vlm"]
     # the languages offered as targets follow the profile (2026-10-04): PROFILE_WITHHELD is defined further down,
