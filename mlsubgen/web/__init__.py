@@ -87,6 +87,16 @@ def build_opts(f: dict) -> list[str]:
     tr = (f.get("translator") or "auto").strip()
     if tr and tr != "auto":
         opts += ["-t", tr]
+    # the hardware profile (2026-10-04): auto = by the card's memory; a chosen one goes to the job's own process as
+    # --profile, which sets its routes, translator sizes and the languages it may be asked for
+    prof = (f.get("profile") or "auto").strip()
+    if prof and prof != "auto":
+        if prof not in config.PROFILES:
+            raise HTTPException(400, f"unknown profile {prof!r}")
+        opts += ["--profile", prof]
+        bad = [t for t in targets if t in config.PROFILE_WITHHELD.get(prof, set())]
+        if bad:
+            raise HTTPException(400, f"not offered on the {prof} profile: {', '.join(config.LANG_NAMES.get(b, b) for b in bad)}")
     asr = (f.get("asr") or "dual").strip()
     if asr and asr != config.ASR_ENGINE:
         opts += ["--asr", asr]
@@ -357,8 +367,12 @@ def create_app() -> FastAPI:
         langs = [(c, config.LANG_NAMES[c], config.NATIVE_NAMES.get(c, "")) for c in defaults if c in config.TARGET_LANGS]
         langs += sorted(((c, n, config.NATIVE_NAMES.get(c, "")) for c, n in config.TARGET_LANGS.items() if c not in defaults),
                         key=lambda x: x[1])
+        profiles = [(p, f"{'≥ ' + str(int(d['min_vram_gb'])) + ' GB' if d.get('min_vram_gb') else 'small'} card; translator {d['routes'].get(('*', '*'), '?')}"
+                     + (f"; withheld: {', '.join(sorted(config.PROFILE_WITHHELD[p]))}" if config.PROFILE_WITHHELD.get(p) else ""))
+                    for p, d in config.PROFILES.items()]
         return render(request, "index.html", translators=list(TRANSLATORS), default_targets=defaults, langs=langs,
-                      last_folder=last_folder(),
+                      last_folder=last_folder(), profiles=profiles, active_profile=config.PROFILE,
+                      vram_gb=round(config.VRAM_GB or 0, 1),
                       routes=[(f"{a}→{b}", m) for (a, b), m in config.TRANSLATE_ROUTES.items()],
                       sources=sorted(config.LANG_NAMES.items(), key=lambda kv: kv[1]),
                       default_genre="a documentary / interview programme")
@@ -379,6 +393,17 @@ def create_app() -> FastAPI:
         return render(request, "skipped.html", skipped=read_skipped())
 
     # json
+    @app.get("/api/languages")
+    def api_languages(profile: str = "auto"):
+        """The languages offered as targets on a profile (2026-10-04) — the form's tick boxes follow the profile select."""
+        name = config.PROFILE if profile in ("", "auto") else profile
+        if name not in config.PROFILES:
+            raise HTTPException(400, f"unknown profile {profile!r}")
+        offered = config.targets_for_profile(name)
+        withheld = {c: config.WITHHELD_REASON.get(c, "measured below shippable on this profile's translators")
+                    for c in config.PROFILE_WITHHELD.get(name, set())}
+        return {"profile": name, "offered": sorted(offered), "withheld": withheld}
+
     @app.get("/api/status")
     def api_status():
         return status()

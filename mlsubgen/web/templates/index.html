@@ -38,6 +38,11 @@
       </select>
     </div>
     <div class="row wrap">
+      <label>Hardware profile</label>
+      <select name="profile" id="profile" title="auto = by the card's memory; a chosen profile sets the translator sizes, the routes and which languages are offered — the tick boxes above follow it">
+        <option value="auto">auto — {{ active_profile }} on this card ({{ vram_gb }} GB)</option>
+        {% for p, desc in profiles %}<option value="{{ p }}">{{ p }} — {{ desc }}</option>{% endfor %}
+      </select>
       <label>Translator</label>
       <select name="translator" title="by language pair unless forced">
         <option value="auto">auto — by language pair ({% for pair, m in routes %}{{ pair }} {{ m }}{% if not loop.last %}, {% endif %}{% endfor %})</option>

@@ -171,6 +171,8 @@ def check_speakers(a: argparse.Namespace) -> None:
 def cmd_languages(a: argparse.Namespace) -> int:
     """The subtitle languages: every code is a target (the translator writes it) and a source (decoded by Qwen3-ASR
     where its aligner covers the language, by whisper elsewhere)."""
+    if getattr(a, "profile", None) and a.profile != "auto":
+        config.apply_profile(a.profile)                 # the offered languages and the routes follow the profile
     defaults = set(config.DEFAULT_TARGETS.split(","))
     from .translate import route as _route
     print(f"{'code':<5} {'language':<22} {'native':<18} {'ASR':<8} {'translator':<16} default")
@@ -1907,6 +1909,14 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     # targets withheld (2026-10-03): still known languages, not offered as targets; the CLI refuses them plainly
     assert len(config.TARGET_LANGS) == 44 and len(config.LANG_NAMES) == 45 and "el" not in config.TARGET_LANGS and "el" in config.LANG_NAMES
     assert "hu" in config.TARGET_LANGS and "my" in config.TARGET_LANGS, "returned 2026-10-04"
+    # per-profile offer (2026-10-04): a profile withholds what is measured below shippable on ITS translators;
+    # unmeasured profiles inherit the full profile's set, and apply_profile() rebuilds the offer
+    assert set(config.PROFILE_WITHHELD) == set(config.PROFILES), "every profile has a withheld set"
+    assert config.targets_for_profile("8gb").keys() == config.targets_for_profile("full").keys(), "inherited until measured"
+    _prev = config.PROFILE
+    config.apply_profile("8gb")
+    assert "el" not in config.TARGET_LANGS and len(config.TARGET_LANGS) == 44
+    assert "translategemma-12b" in config.TRANSLATORS and config.TRANSLATORS["translategemma-4b"].prompt_style == "translategemma"
     config.apply_profile("full")
     from .translate import foreign_script, route as _route
     assert _route("en", "hu") == "translategemma" and _route("en", "lv") == "translategemma" and _route("en", "fr") == "gemma4" and _route("ja", "en") == "qwen3.8"
@@ -2290,6 +2300,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--url", default=None)
     m.set_defaults(fn=cmd_models)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
+    ln.add_argument("--profile", default="auto", help="which hardware profile's offer and routes to show (auto = this card's)")
     ln.set_defaults(fn=cmd_languages)
     wy = sub.add_parser("why", help="why each subtitle file of a video says what it says: transcript source, detection, speakers, terms, translator (from the work file)")
     wy.add_argument("video")

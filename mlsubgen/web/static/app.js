@@ -136,6 +136,27 @@ function mlsubgenIndex() {
     });
     document.addEventListener("click", e => { if (dd.open && !dd.contains(e.target)) dd.open = false; });
     summarise();
+    // the hardware profile decides which languages are offered (2026-10-04): a withheld one is unticked and greyed,
+    // with the reason as its tooltip, the moment the profile changes
+    const prof = $("#profile");
+    if (prof) {
+      const follow = async () => {
+        try {
+          const r = await api("/api/languages?profile=" + encodeURIComponent(prof.value));
+          dd.querySelectorAll("input[type=checkbox]").forEach(c => {
+            const code = c.name.replace(/^target_/, "");
+            const why = r.withheld[code];
+            c.disabled = !!why;
+            if (why) c.checked = false;
+            c.parentElement.classList.toggle("muted", !!why);
+            c.parentElement.title = why ? `not offered on the ${r.profile} profile: ${why}` : code;
+          });
+          summarise();
+        } catch (err) { console.warn("languages for profile:", err.message); }
+      };
+      prof.addEventListener("change", follow);
+      follow();
+    }
   }
   const purge = async (done) => {
     try { $("#queue-note").textContent = (await api("/api/jobs/purge" + (done ? "?done=true" : ""), { method: "POST" })).result; }

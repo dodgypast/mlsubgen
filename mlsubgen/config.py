@@ -63,7 +63,21 @@ SOURCE_LANGS = set(LANG_NAMES)
 # gender slashes, and the character sheet has to settle that first.
 UNSUPPORTED_TARGETS = {"el"}
 WITHHELD_REASON = {"el": "the 31B's grammar errors vs TranslateGemma's gender slashes — returns once the character sheet is measured on it (2026-10-04)"}
+# Per profile (2026-10-04): a smaller card runs a smaller translator, and a language that reads well on the 31B
+# may not on the 26B or the 4B. Each profile withholds what has been measured below shippable on ITS translators;
+# until a profile has its own measurement it inherits the full profile's set (the overnight batch of 2026-10-04 is
+# the first such measurement). apply_profile() rebuilds TARGET_LANGS from this.
+PROFILE_WITHHELD: dict[str, set[str]] = {
+    "full": set(UNSUPPORTED_TARGETS), "16gb": set(UNSUPPORTED_TARGETS), "12gb": set(UNSUPPORTED_TARGETS),
+    "8gb": set(UNSUPPORTED_TARGETS), "12gb-dense": set(UNSUPPORTED_TARGETS), "8gb-dense": set(UNSUPPORTED_TARGETS),
+}
 TARGET_LANGS = {c: n for c, n in LANG_NAMES.items() if c not in UNSUPPORTED_TARGETS}
+
+
+def targets_for_profile(name: str) -> dict[str, str]:
+    """The languages offered as targets on a profile — what `mlsubgen languages --profile X` and the web form show."""
+    withheld = PROFILE_WITHHELD.get(name, UNSUPPORTED_TARGETS)
+    return {c: n for c, n in LANG_NAMES.items() if c not in withheld}
 # ── Default subtitle languages ───────────────────────────────────────────────────────────────────────────
 # Precedence: --target on a run  >  settings.json (set from the CLI: `mlsubgen config targets en,th`, or the web
 # form's "make these the default")  >  MLSUBGEN_TARGETS in the environment (the units / .env)  >  "en".
@@ -228,6 +242,12 @@ def apply_profile(name: str | None = None) -> str:
     OLLAMA_NUM_GPU = p.get("num_gpu")
     if not os.environ.get("MLSUBGEN_OCR_VLM"):
         OCR_VLM_MODEL = p["vlm"]
+    # the languages offered as targets follow the profile (2026-10-04): PROFILE_WITHHELD is defined further down,
+    # so the first call at import leaves the module defaults and the next call (a job's profile) applies them
+    g = globals()
+    if "PROFILE_WITHHELD" in g and "LANG_NAMES" in g:
+        g["UNSUPPORTED_TARGETS"] = set(g["PROFILE_WITHHELD"].get(PROFILE, g["UNSUPPORTED_TARGETS"]))
+        g["TARGET_LANGS"] = {c: n for c, n in g["LANG_NAMES"].items() if c not in g["UNSUPPORTED_TARGETS"]}
     return PROFILE
 
 
@@ -436,7 +456,13 @@ TRANSLATORS: dict[str, Translator] = {
     "gemma4": Translator("gemma4", "gemma4:31b-it-qat", note="Gemma 4 31B QAT, 19 GB, Apache-2.0", think=False),
     # Google's translation-specialised Gemma 3 (55 languages). Fixed prompt format; no instructions beyond 'translate'.
     "translategemma": Translator("translategemma", "translategemma:27b", prompt_style="translategemma",
-                                 note="TranslateGemma 27B q4_K_M, 17 GB — translation-only model"),
+                                 note="TranslateGemma 27B q4_K_M, 17 GB — translation-only model; routed for six languages on the full profile"),
+    # the smaller TranslateGemmas (2026-10-04): candidates for the routed languages on the small profiles — unmeasured
+    # until the overnight batch; nothing routes to them yet
+    "translategemma-12b": Translator("translategemma-12b", "translategemma:12b", prompt_style="translategemma",
+                                     note="TranslateGemma 12B, 8.1 GB — candidate for the 16gb/12gb profiles' routed languages (unmeasured)"),
+    "translategemma-4b": Translator("translategemma-4b", "translategemma:4b", prompt_style="translategemma",
+                                    note="TranslateGemma 4B, 3.3 GB — candidate for the 8gb profile's routed languages (unmeasured)"),
     # Fast MoE fallback: JP-TL-Bench LT 9.56 (above GPT-4o), ~3B active params.
     "qwen3-30b": Translator("qwen3-30b", "qwen3:30b-a3b-instruct-2507-q4_K_M", note="Qwen3-30B-A3B-Instruct-2507, ~18 GB, fast", think=False),
     # Smaller cards (the 12gb / 8gb profiles). Dense Gemma 4 12B at 4-bit QAT; the E4B edge model; the 26B-A4B MoE
