@@ -108,6 +108,10 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--terms", default="auto", choices=["auto", "off"],
                    help="terminology pass (0.5.1): auto = the film's names and recurring terms are rendered once per target and "
                         "fed to every translation window (your --glossary still wins); off = windows decide on their own")
+    p.add_argument("--register", default="auto", choices=["auto", "off"],
+                   help="the character sheet (0.5.1): auto = who speaks, their gender and how they address each other is worked out "
+                        "once per film and given to every window in the target's terms (pronouns, kin terms, politeness, grammatical "
+                        "gender); off = each window guesses")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -374,7 +378,8 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 0
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr, terms=a.terms) for v, want in todo]
+                 a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr, terms=a.terms,
+                 register=a.register) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -873,7 +878,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
     target = parse_targets(a.target, allow_withheld=True)[0]        # the bench measures withheld languages too
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
-              a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms)
+              a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms,
+              register=a.register)
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
     key = asr_key_for(engines, context, a.asr)
@@ -922,7 +928,8 @@ def cmd_bench(a: argparse.Namespace) -> int:
     bench_dir = Path(a.out_dir).expanduser()
     bench_dir.mkdir(parents=True, exist_ok=True)
     tag = video.stem + (f".{int(clip[0])}-{int(clip[1])}" if clip else "") + (f".spk-{job.speakers}" if speakers_wanted(job) else "") \
-        + (".terms" if (job.terms or "auto") != "off" and len(cues) >= config.TERMS_MIN_CUES else "")
+        + (".terms" if (job.terms or "auto") != "off" and len(cues) >= config.TERMS_MIN_CUES else "") \
+        + (".chars" if (job.register or "auto") != "off" and len(cues) >= config.CHARACTERS_MIN_CUES else "")
     reference = None
     ref_texts = None
     if a.reference:
@@ -1890,7 +1897,19 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     from .subs import LANG_TAGS as _LT, code_for_tag, pick as _pick, plan_embedded
     assert all(c in _LT for c in config.LANG_NAMES) and code_for_tag("tgl") == "tl" and code_for_tag("khm") == "km"
     # targets withheld (2026-10-03): still known languages, not offered as targets; the CLI refuses them plainly
-    assert len(config.TARGET_LANGS) == 37 and len(config.LANG_NAMES) == 45 and "el" not in config.TARGET_LANGS and "el" in config.LANG_NAMES
+    assert len(config.TARGET_LANGS) == 44 and len(config.LANG_NAMES) == 45 and "el" not in config.TARGET_LANGS and "el" in config.LANG_NAMES
+    assert "hu" in config.TARGET_LANGS and "my" in config.TARGET_LANGS, "returned 2026-10-04"
+    config.apply_profile("full")
+    from .translate import foreign_script, route as _route
+    assert _route("en", "hu") == "translategemma" and _route("en", "lv") == "translategemma" and _route("en", "fr") == "gemma4" and _route("ja", "en") == "qwen3.8"
+    # the foreign-script guard: letters outside the target's script and Latin are a leak; Latin names are not
+    assert foreign_script("Ну thôi! Нет.", "ru") == 0, "Vietnamese diacritics are Latin letters: the guard cannot tell — see untranslated()"
+    assert foreign_script("நீ ஒரு சிறந்த எழுத்தாளன். என்意思是...", "ta") == 3
+    assert foreign_script("ខ្ញុំមានអារម្មណ៍ដូចនៅទីនោះផ្ទាល់เลย", "km") == 3
+    assert foreign_script("Tā ir tava дневna", "lv") == 4 and foreign_script("Es izlasīju vienu lapu.", "lv") == 0
+    assert foreign_script("ไหน ကြည့်ရအောင်", "my") == 3 and foreign_script("Peace! Peace!", "my") == 0
+    assert foreign_script("蠟筆小新 says OK", "zh") == 0 and foreign_script("Shin-chan はカブトムシが好き", "zh") > 0
+    assert foreign_script("ทำให้ นะ", "th") == 0 and foreign_script("日本語の字幕", "ja") == 0 and foreign_script("한국어 자막 OK", "ko") == 0
     assert config.LANG_NAMES["zh"].endswith("(Simplified)") and config.LANG_NAMES["yue"].endswith("(Traditional)")
     try:
         parse_targets("en,el", warn=False)

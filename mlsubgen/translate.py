@@ -287,16 +287,24 @@ def spoken(c: Cue) -> str:
     return f"[{c.speaker}] {c.ja}" if c.speaker else c.ja
 
 
+CHARACTERS_RULE = ("CHARACTERS lists who speaks in this film and how each of them refers to themselves and addresses the "
+                   "others in {tgt}: pronouns, kin terms, titles, politeness level, and the grammatical gender of their "
+                   "own speech. Work out who is speaking in each line from the dialogue and the CONTEXT, then follow the "
+                   "sheet for that character. Never hedge gender with slashes or brackets: pick the form the sheet gives.")
+
+
 def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: list[Cue],
-                 glossary: dict[str, str], genre: str, target: str) -> tuple[str | None, str]:
+                 glossary: dict[str, str], genre: str, target: str, characters: str = "") -> tuple[str | None, str]:
     src = lang_name(window[0].lang)
     tgt = lang_name(target)
     tagged = any(c.speaker for c in window + before + after)
-    if tr.prompt_style == "translategemma":                      # fixed prompt: no room for tags
+    if tr.prompt_style == "translategemma":                      # fixed prompt: no room for tags or the sheet
         numbered = "\n".join(f"{c.idx + 1}\t{c.ja}" for c in window)
         return None, TRANSLATEGEMMA_USER.format(src=src, tgt=tgt, text=numbered.replace("\t", ". "))
     numbered = "\n".join(f"{c.idx + 1}\t{spoken(c)}" for c in window)
     parts = []
+    if characters:
+        parts.append(f"CHARACTERS (who speaks, and how they address each other in {tgt} — follow it):\n{characters}")
     if glossary:
         parts.append(f"GLOSSARY ({src} → {tgt}):\n" + "\n".join(f"{k} → {v}" for k, v in glossary.items()))
     if before:
@@ -306,6 +314,8 @@ def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: li
     if after:
         parts.append("FOLLOWING LINES (context only, do not output):\n" + "\n".join(f"[{c.idx + 1}] {spoken(c)}" for c in after))
     system = system_prompt(window[0].lang, target, genre)
+    if characters:
+        system += "\n- " + CHARACTERS_RULE.format(tgt=tgt)
     if tagged:
         system += "\n- " + SPEAKER_RULE
     return system, "\n\n".join(parts)
@@ -349,6 +359,44 @@ def has_japanese(s: str) -> bool:
     return script_of(s) in ("ja", "han")
 
 
+# ── the foreign-script guard (0.5.1, 2026-10-04) ────────────────────────────────────────────────────────────
+# A translated line may contain letters of the target's script and Latin letters (names, brands, "OK"). Any other
+# letter is a leak — a Vietnamese thôi in a Russian line, Chinese characters in Tamil, Thai particles in Khmer and
+# Lao, Devanagari in Lao, Cyrillic in Latvian were all found in one film — and the line is sent back through the
+# per-line fallback. A line that still leaks after that is kept and flagged rather than lost.
+_SCRIPT_RANGES = {
+    "ja": [(0x3040, 0x30FF), (0x31F0, 0x31FF), (0x4E00, 0x9FFF), (0xFF66, 0xFF9F)],
+    "zh": [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x3100, 0x312F)], "yue": [(0x4E00, 0x9FFF), (0x3400, 0x4DBF)],
+    "ko": [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F), (0x4E00, 0x9FFF)],
+    "th": [(0xE00, 0xE7F)], "lo": [(0xE80, 0xEFF)], "km": [(0x1780, 0x17FF), (0x19E0, 0x19FF)], "my": [(0x1000, 0x109F), (0xAA60, 0xAA7F)],
+    "el": [(0x370, 0x3FF), (0x1F00, 0x1FFF)], "ru": [(0x400, 0x52F)], "uk": [(0x400, 0x52F)], "bg": [(0x400, 0x52F)],
+    "he": [(0x590, 0x5FF), (0xFB1D, 0xFB4F)], "ar": [(0x600, 0x6FF), (0x750, 0x77F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
+    "fa": [(0x600, 0x6FF), (0x750, 0x77F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)],
+    "hi": [(0x900, 0x97F), (0xA8E0, 0xA8FF)], "bn": [(0x980, 0x9FF)], "ta": [(0xB80, 0xBFF)],
+}
+
+
+def _latin(ch: str) -> bool:
+    o = ord(ch)
+    return o < 0x250 or 0x1E00 <= o <= 0x1EFF or 0x300 <= o <= 0x36F or 0x2C60 <= o <= 0x2C7F or 0xA720 <= o <= 0xA7FF
+
+
+def foreign_script(text: str, tgt: str) -> int:
+    """How many letters of `text` are in a script that is neither the target's nor Latin."""
+    ranges = _SCRIPT_RANGES.get(tgt)
+    bad = 0
+    for ch in text:
+        if not ch.isalpha() or _latin(ch):
+            continue
+        o = ord(ch)
+        if ranges and any(lo <= o <= hi for lo, hi in ranges):
+            continue
+        if 0xE31 <= o <= 0xE4E and tgt == "th":                 # Thai combining marks are not alpha but belong
+            continue
+        bad += 1
+    return bad
+
+
 def untranslated(text: str, src: str, tgt: str) -> bool:
     """The model echoed the source instead of translating: the line is in the source's script and not the target's.
     Two Latin-script languages cannot be told apart this way; then only an empty line counts."""
@@ -367,7 +415,8 @@ def translate_cues(cues: list[Cue], client: LLMClient, glossary: dict[str, str] 
                    genre: str = "a documentary / interview programme",
                    window_size: int = config.WINDOW_CUES, before_n: int = config.CONTEXT_BEFORE,
                    after_n: int = config.LOOKAHEAD_AFTER, progress: bool = True, checkpoint=None,
-                   target: str = "en", pool: ClientPool | None = None, force_model: str | None = None) -> list[Cue]:
+                   target: str = "en", pool: ClientPool | None = None, force_model: str | None = None,
+                   characters: str = "") -> list[Cue]:
     """Translate in windows into `target`. A window never mixes source languages; cues already in the target are
     copied through; the model for each window comes from the route of its language pair (via `pool`, else
     `client` handles everything). `checkpoint(cues)` runs after every window so an interrupted run loses at most
@@ -399,16 +448,22 @@ def translate_cues(cues: list[Cue], client: LLMClient, glossary: dict[str, str] 
         tr = cl.tr
         before = [c for c in cues[max(0, i - before_n):i] if c.en]
         after = cues[i + len(window):i + len(window) + after_n]
-        system, user = build_prompt(tr, window, before, after, glossary, genre, target)
+        system, user = build_prompt(tr, window, before, after, glossary, genre, target, characters)
         got = _translate_window(cl, system, user, window, target)
         missing = [c for c in window if untranslated(c.en, c.lang, target)]
-        if missing:
-            cl.usage.fallbacks += len(missing)
-            for c in missing:
-                c.en = _translate_single(cl, c, before + [x for x in window if x.en and x is not c], glossary, genre, target)
+        leaked = [c for c in window if c not in missing and c.en and foreign_script(c.en, target)]
+        if missing or leaked:
+            cl.usage.fallbacks += len(missing) + len(leaked)
+            for c in missing + leaked:
+                was = c.en
+                c.en = _translate_single(cl, c, before + [x for x in window if x.en and x is not c], glossary, genre, target, characters)
+                if c in leaked and foreign_script(c.en or "", target):
+                    c.flags = (c.flags or []) + ["foreign-script"]       # kept, flagged: a reader can find it
+                    if not c.en:
+                        c.en = was
         if progress:
             _log(f"[tl:{tr.name}] {c0.lang}→{target} {i + len(window)}/{total}  got {got}/{len(window)}"
-                 f"{'  fallback ' + str(len(missing)) if missing else ''}")
+                 f"{'  fallback ' + str(len(missing)) if missing else ''}{'  foreign-script ' + str(len(leaked)) if leaked else ''}")
         if checkpoint is not None:
             checkpoint(cues)
         i += len(window)
@@ -463,7 +518,7 @@ def _translate_window(client: LLMClient, system: str | None, user: str, window: 
 
 
 def _translate_single(client: LLMClient, cue: Cue, context: list[Cue], glossary: dict[str, str], genre: str,
-                      target: str) -> str:
+                      target: str, characters: str = "") -> str:
     src, tgt = lang_name(cue.lang), lang_name(target)
     ctx = "\n".join(f"{spoken(c)} → {c.en}" for c in context[-6:] if c.en)
     gl = "\n".join(f"{k} → {v}" for k, v in glossary.items())
@@ -471,10 +526,13 @@ def _translate_single(client: LLMClient, cue: Cue, context: list[Cue], glossary:
         system, user = None, TRANSLATEGEMMA_USER.format(src=src, tgt=tgt, text=cue.ja)
     else:
         system = system_prompt(cue.lang, target, genre)
+        if characters:
+            system += "\n- " + CHARACTERS_RULE.format(tgt=tgt)
         if cue.speaker or any(c.speaker for c in context):
             system += "\n- " + SPEAKER_RULE
-        user = ((f"GLOSSARY:\n{gl}\n\n" if gl else "") + (f"CONTEXT (do not output):\n{ctx}\n\n" if ctx else "") +
-                f"Translate this one subtitle line into {tgt}. Output only the {tgt} text, nothing else:\n{spoken(cue)}")
+        user = ((f"CHARACTERS (follow it):\n{characters}\n\n" if characters else "") + (f"GLOSSARY:\n{gl}\n\n" if gl else "")
+                + (f"CONTEXT (do not output):\n{ctx}\n\n" if ctx else "")
+                + f"Translate this one subtitle line into {tgt}. Output only the {tgt} text, nothing else:\n{spoken(cue)}")
     for attempt in range(2):
         try:
             text = client.chat(system, user, max_tokens=256, nudge=(attempt == 1))
@@ -482,7 +540,9 @@ def _translate_single(client: LLMClient, cue: Cue, context: list[Cue], glossary:
             continue            # the second attempt re-samples; if that loops too, the cue is flagged below
         parsed = parse_numbered(text)
         cand = clean_en(parsed.get(cue.idx + 1) or parsed.get(1) or text.splitlines()[0] if text else "", target)
-        if cand and not untranslated(cand, cue.lang, target):
+        if cand and not untranslated(cand, cue.lang, target) and not foreign_script(cand, target):
             return cand
+        if cand and not untranslated(cand, cue.lang, target) and attempt == 1:
+            return cand                                   # a leak that survived two tries: the caller flags it
     cue.flags = (cue.flags or []) + ["untranslated"]
     return cue.en or ""

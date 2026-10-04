@@ -43,6 +43,7 @@ class Job:
     speaker_threshold: float | None = None
     ocr: str = "auto"                # --ocr auto | off (0.4.8): bitmap subtitle tracks read through OCR as sources / targets
     terms: str = "auto"              # --terms auto | off (0.5.1): the film's names rendered once and fed to every window
+    register: str = "auto"           # --register auto | off (0.5.1): the character sheet — who speaks, how they address each other
 
     @property
     def work_file(self) -> Path:
@@ -631,10 +632,49 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
     return glossary
 
 
+# ── stage 1f: the character sheet (0.5.1) ─────────────────────────────────────────────────────────────────
+def characters_wanted(job: Job, cues: list[Cue]) -> bool:
+    return (job.register or "auto") != "off" and len(cues) >= config.CHARACTERS_MIN_CUES
+
+
+def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: str, pool: ClientPool,
+                     force_model: str | None = None) -> str:
+    """The CHARACTERS rules for this target (cached per source key and target), or "" when off, too short, or the
+    translator for the pair cannot take them (TranslateGemma's fixed prompt)."""
+    from . import characters as ch
+    from .translate import route
+    if not characters_wanted(job, cues):
+        return ""
+    langs: dict[str, int] = {}
+    for c in cues:
+        langs[c.lang] = langs.get(c.lang, 0) + 1
+    src = max(langs, key=langs.get)
+    texts = [c.ja for c in cues if c.lang == src and c.ja]
+    entry = data.setdefault("characters", {}).setdefault(key, {})
+    chat_capable = lambda name: config.TRANSLATORS[name].prompt_style != "translategemma"     # noqa: E731
+    chosen = force_model or route(src, target)
+    if not chat_capable(chosen):
+        chosen = route(src, target) if chat_capable(route(src, target)) else config.DEFAULT_TRANSLATOR
+    client = pool.use(chosen)
+    t0 = time.time()
+    if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry:
+        entry.update({"version": config.CHARACTERS_VERSION, "source": src, "sheet": ch.build_sheet(client, texts, src, job.genre),
+                      "renderings": {}, "model": client.tr.model})
+        work.save(job.work_file, data)
+    rules = entry["renderings"].get(target)
+    if rules is None:
+        rules = ch.render_sheet(client, entry["sheet"], src, target, job.genre)
+        entry["renderings"][target] = rules
+        work.save(job.work_file, data)
+    _log(f"[characters] {len(entry['sheet'])} character(s): {ch.summarise(entry['sheet'])}" + (f" — rules for {config.LANG_NAMES.get(target, target)}: "
+         f"{len(rules.splitlines())} line(s)" if rules else " — no rules rendered") + (f" in {time.time() - t0:.0f}s" if time.time() - t0 > 1 else " (cached)"))
+    return rules
+
+
 # ── stage 2: translation per target ───────────────────────────────────────────────────────────────────────
 def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str, pool: ClientPool,
                     force: bool = False, force_model: str | None = None) -> list[Cue]:
-    tkey = f"{key}|{target}" + ("|terms" if terms_wanted(job, cues) else "")
+    tkey = f"{key}|{target}" + ("|terms" if terms_wanted(job, cues) else "") + ("|chars" if characters_wanted(job, cues) else "")
     cached = (data.get("translations") or {}).get(tkey)
     partial = bool(cached and cached.get("partial"))
     if cached and not partial and not force:
@@ -659,8 +699,9 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
         work.save(job.work_file, data)
 
     glossary = stage_terms(job, data, key, cues, target, pool, force_model)      # 0.5.1: names rendered once, up front
+    characters = stage_characters(job, data, key, cues, target, pool, force_model)   # 0.5.1: who speaks, how they address each other
     translate_cues(fresh, None, glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
-                   target=target, pool=pool, force_model=force_model)
+                   target=target, pool=pool, force_model=force_model, characters=characters)
     usage = {n: cl.usage.__dict__ for n, cl in pool.clients.items()}
     data.setdefault("translations", {})[tkey] = {"target": target, "cues": [c.to_dict() for c in fresh],
                                                   "models": sorted({cl.tr.model for cl in pool.clients.values()}),

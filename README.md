@@ -1,4 +1,4 @@
-# mlsubgen — subtitles in 37 languages for your videos, entirely on your own machine
+# mlsubgen — subtitles in 44 languages for your videos, entirely on your own machine
 
 ```
 cd /some/folder/of/videos
@@ -13,8 +13,8 @@ directory, and the only network traffic is the one-time download of the models.
 
 **mlsubgen** = *multi-language* + *machine-learning* subtitle generator. It started as a Japanese→English tool
 for a personal video collection and grew into a general one: the language of every stretch of speech is detected,
-each stretch is transcribed with that language forced, and each of 37 target languages gets its own file (45 are
-known; eight are withheld as targets until a translator measures well enough on them — see *Languages*).
+each stretch is transcribed with that language forced, and each of 44 target languages gets its own file (45 are
+known; Greek is withheld as a target until a translator measures well enough on it — see *Languages*).
 
 ## Hardware
 
@@ -84,7 +84,7 @@ Every step has a gate that drops evidence which is too thin or too muddled, and 
 - **Translation by an LLM** (Ollama, or any OpenAI-compatible server) in windows of 20 cues with rolling
   context, a glossary for names, per-language register rules (Thai particles, du/Sie, Simplified vs
   Traditional Chinese, …), and a per-line fallback for anything the model skips.
-- **37 subtitle languages** (45 known; eight withheld as targets until measured good enough — see *Languages*),
+- **44 subtitle languages** (45 known; Greek withheld as a target until measured good enough — see *Languages*),
   chosen per job with tick boxes in the web UI or `--target en,th,de`; a cue already
   in the target language is copied through, not translated.
 - **Subtitle typesetting** per language: line length by script, reading-speed ceilings (slower for CJK), minimum
@@ -136,7 +136,7 @@ mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
 mlsubgen --speakers auto FOLDER  # with speaker diarization (mlsubgen pull speakers once);  --speakers 3  when you know the count
-mlsubgen languages               # the 37 offered codes, their native names, which engine decodes each; the withheld eight
+mlsubgen languages               # the 44 offered codes, their native names, which engine decodes each; the withheld one
 mlsubgen config targets th,de    # save the default languages (the web form has "make these the default");  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
 mlsubgen pull                    # download what a default run needs;  pull gemma4 · pull some/tag:latest · pull --all
@@ -172,6 +172,7 @@ files that can be re-queued with the language forced.
 | word ↔ speaker | *with `--speakers`*: each aligned word takes the turn that covers it clearly, or stays unlabelled |
 | cues | sentence ends, pauses, speaker changes, length limits, hallucination filters (evidence-gated) |
 | terms | per target, once per film: the recurring names and terms of the transcript are found (a script heuristic plus one LLM pass) and rendered once — standard transliteration for names, the established form for titles — into the glossary every window reads, so a character is spelt the same way in the last scene as in the first; your own `--glossary` wins. `--terms off` skips it |
+| characters | once per film: a chat model reads the transcript and lists who speaks — gender, age, role, who is whose parent, spouse, boss, friend — then, per target, turns that into the rules of address for that language: how each character refers to themselves, how they address each of the others (pronoun, kin term, title, politeness level, particles), and the grammatical gender of their own speech. Every window gets the sheet, so a father does not answer in the feminine in Hebrew, a ten-year-old does not call her father *vous*, and a Thai child stays หนู to her mother from the first scene to the last. `--register off` skips it; TranslateGemma's fixed prompt cannot take it |
 | translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, register rules, speaker continuity, retry and per-line fallback |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps → `<video>.<lang>.srt` |
 
@@ -270,9 +271,9 @@ when you give it a reference `.srt`) — the way to choose a model for a languag
 
 ### Languages
 
-`mlsubgen languages` lists the 37 codes offered as targets. 45 languages are known: every one is a source (a
+`mlsubgen languages` lists the 44 codes offered as targets. 45 languages are known: every one is a source (a
 subtitle track in it is read; Qwen3-ASR decodes the languages its aligner covers — Japanese, Chinese, Cantonese,
-Korean, English, French, German, Italian, Portuguese, Russian, Spanish — and whisper the rest), and 37 are
+Korean, English, French, German, Italian, Portuguese, Russian, Spanish — and whisper the rest), and 44 are
 targets. Target quality is the translator's, and on 2026-10-03 it was measured the only way that counts for 45
 languages at once: one episode translated into all of them from its English track and the same scene read in
 each, by a competent reader rather than a native speaker. Three tiers came out of it:
@@ -286,11 +287,17 @@ each, by a competent reader rather than a native speaker. Three tiers came out o
   Catalan, Slovak, Slovenian (a wrong or invented word every ten to twenty lines — *escarabells* for *escarabats*,
   *hrovi* for *hrošči*). Offered, because something is better than nothing when the limit is stated; `bench` on
   your own material before a long run.
-- **Withheld as targets (8):** Greek, Hungarian, Lithuanian, Latvian, Estonian, Khmer, Lao, Burmese. Invented
-  words (Lithuanian *xolops* for beetle), broken grammar, English left in a line, and for the three Southeast Asian
-  scripts characters from other scripts leaking into the text. They are still read as sources and still detected;
-  they come back as targets when a translator measured on them passes — a bake-off of three translators on these
-  languages is the next measurement, and the routing table takes a model per language.
+- **Returned on a second translator (4) and on a guard (3):** the bake-off happened on 2026-10-04 — one film,
+  44 languages, the 31B against TranslateGemma 27B, scored by dictionary-unknown words, script purity and reading.
+  Hungarian, Lithuanian, Latvian and Estonian come back routed to **TranslateGemma**, whose unknown-word rate on
+  them is a quarter to a tenth of the 31B's (Latvian 5.6 % → 0.7 %); Catalan and Finnish move to it for the same
+  reason. Khmer, Lao and Burmese come back on the 31B now that the translator's **foreign-script guard** sends a
+  line with another script's letters in it back through the per-line fallback; their fault was leakage, and two
+  independent reviewers found the Burmese otherwise usable. TranslateGemma is not the default for the rest because
+  it has faults of its own: it defaults to formal address (a child saying *vous* to her father) and hedges gender
+  with slashes where the speaker is unknown — which the character sheet (pipeline table) exists to settle.
+- **Withheld as a target (1):** Greek — the choice there is between the 31B's grammar errors and TranslateGemma's
+  gender slashes, and it returns when the character sheet is measured on it.
 
 The sample page the tiers were read from is in `bench/` after a run (`…45-languages.html`), and the same
 measurement is one `mlsubgen` run away on any file: the tiers are this translator on this material, not a verdict

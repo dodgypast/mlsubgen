@@ -56,9 +56,12 @@ SOURCE_LANGS = set(LANG_NAMES)
 # beetle, Estonian "märgikäigid"), broken grammar (Greek), Hungarian forms, and for Khmer, Lao and Burmese other
 # scripts leaking into the text. They stay known languages (a subtitle track in them is still read as a source,
 # detection and OCR still handle them) but are not offered as targets until a translator measured on them passes.
-# The languages kept with known minor errors (Chinese, Hebrew, Bulgarian, Croatian, Catalan, Slovak, Slovenian) are
-# listed as such in the README; something is better than nothing when the limits are stated.
-UNSUPPORTED_TARGETS = {"el", "hu", "lt", "lv", "et", "km", "lo", "my"}
+# 2026-10-04: Hungarian, Lithuanian, Latvian and Estonian return on TranslateGemma (routes above — dictionary-unknown
+# words at a quarter to a tenth of the 31B's); Khmer, Lao and Burmese return on the 31B now that the translator's
+# foreign-script guard sends a leaking line back (their faults were leaks, two reviewers found Burmese usable
+# otherwise). Greek stays withheld: the choice there is between the 31B's grammar errors and TranslateGemma's
+# gender slashes, and the character sheet has to settle that first.
+UNSUPPORTED_TARGETS = {"el"}
 TARGET_LANGS = {c: n for c, n in LANG_NAMES.items() if c not in UNSUPPORTED_TARGETS}
 # ── Default subtitle languages ───────────────────────────────────────────────────────────────────────────
 # Precedence: --target on a run  >  settings.json (set from the CLI: `mlsubgen config targets en,th`, or the web
@@ -133,8 +136,17 @@ TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
 # remainder is read from RAM every token). The profiles below take the 26B where the card AND the RAM allow it,
 # and fall back to the dense small models otherwise. OLLAMA_NUM_GPU is the layer split, passed on every request.
 PROFILES = {
-    "full": dict(min_vram_gb=20.0, routes={("ja", "en"): "qwen3.8", ("*", "*"): "gemma4"}, default="qwen3.8",
-                 whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat", num_gpu=None, min_ram_gb=16),
+    # Per-language routes on the full profile (2026-10-04, one film in 44 languages, two translators): TranslateGemma
+    # 27B where the 31B invents words (Hungarian 3.5 % of words unknown to the dictionary → 0.4, Lithuanian 4.3 →
+    # 0.6, Latvian 5.6 → 0.7, Estonian 3.0 → 0.5, Catalan 2.6 → 1.0; Finnish invented words on reading) and its
+    # own fault — formal address by default, gender hedged with slashes — costs little. The 31B keeps every language
+    # with a register system it handles (tu/vous, 반말, kin pronouns), and Greek, Czech and Slovenian until the
+    # character sheet settles the gender question for both.
+    "full": dict(min_vram_gb=20.0,
+                 routes={("ja", "en"): "qwen3.8", ("*", "hu"): "translategemma", ("*", "lt"): "translategemma",
+                         ("*", "lv"): "translategemma", ("*", "et"): "translategemma", ("*", "ca"): "translategemma",
+                         ("*", "fi"): "translategemma", ("*", "*"): "gemma4"},
+                 default="qwen3.8", whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat", num_gpu=None, min_ram_gb=16),
     "16gb": dict(min_vram_gb=15.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
                  whisper_compute="float16", asr_sequential=False, vlm="gemma4:26b", num_gpu=22, min_ram_gb=16,
                  fallback="12gb-dense"),
@@ -340,6 +352,11 @@ TERMS_MIN_CUES = 40            # a clip shorter than this has no recurring names
 TERMS_MIN_OCCURRENCES = 2      # a candidate must occur this often in the transcript to be a term
 TERMS_MAX = 60                 # the most frequent terms are kept; the glossary goes into every window's prompt
 TERMS_CHUNK_CHARS = 6000       # transcript text per extraction call (up to four calls, spread over a long film)
+
+# ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
+CHARACTERS_VERSION = 1         # part of the cache: bump when the prompts change
+CHARACTERS_MIN_CUES = 40       # a clip shorter than this has no recurring characters worth a sheet
+CHARACTERS_CHARS = 14000       # transcript text the sheet call reads (sampled evenly beyond that)
 
 # ── OCR of bitmap subtitle tracks (0.4.8) ────────────────────────────────────────────────────────────────────
 OCR_WORKERS = 4                # tesseract processes at once (one per image; a 1,800-cue track is ~4 min on four cores)
