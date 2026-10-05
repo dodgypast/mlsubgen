@@ -44,6 +44,7 @@ class Job:
     ocr: str = "auto"                # --ocr auto | off (0.4.8): bitmap subtitle tracks read through OCR as sources / targets
     terms: str = "auto"              # --terms auto | off (0.5.1): the film's names rendered once and fed to every window
     register: str = "auto"           # --register auto | off (0.5.1): the character sheet — who speaks, how they address each other
+    web_context: str | None = None   # --web-context auto | off (0.5.8, opt-in): what is publicly known about the title, as priors
 
     @property
     def work_file(self) -> Path:
@@ -134,6 +135,19 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
         return satisfied, None
     src, lang = source
     name = config.LANG_NAMES.get(lang, lang)
+    # When a target IS the spoken language, the audio is the original and any foreign track is a translation of it
+    # (2026-10-05: an English film with only an Italian track would have had its Italian translated back into
+    # English). So: listen, and keep the foreign track as evidence for the reconciler and the terms rather than as
+    # the source. The audio tag is the only knowledge of the spoken language this early; a wrong tag is overridden by
+    # --source or --subs.
+    if spoken and spoken in remaining and lang != spoken and not isinstance(src, Path):
+        data.setdefault("video", str(job.video))
+        data["evidence_track"] = {"track": src.index, "codec": src.codec, "language": lang, "title": src.title,
+                                  "why": f"a {config.LANG_NAMES.get(spoken, spoken)} target from {config.LANG_NAMES.get(spoken, spoken)} audio: the audio is the original"}
+        work.save(job.work_file, data)
+        _log(f"[subs] {name} track s:{src.index} is a translation of the {config.LANG_NAMES.get(spoken, spoken)} audio, and "
+             f"{config.LANG_NAMES.get(spoken, spoken)} is a target — listening to the original; the track is kept as evidence")
+        return satisfied, None
     if isinstance(src, Path):
         cues = cues_from_track(src, lang)
         key = f"sidecar|{src.name}|{lang}"
@@ -405,6 +419,27 @@ def _stage_asr_dual(job: Job, data: dict, engines: Engines, audio, chunks: list[
     return provisional
 
 
+def evidence_lines(job: Job, data: dict) -> tuple[list, str]:
+    """The foreign subtitle track recorded as evidence (0.5.6 — a text track in another language when the target is
+    the spoken language, see stage_subs), as (start, end, text) lines, extracted once and cached in the work file.
+    Returns ([], "") when there is none."""
+    ev = data.get("evidence_track")
+    if not ev or ev.get("track") is None:
+        return [], ""
+    if "lines" not in ev:
+        try:
+            tmp = job.tmp_dir / (job.work_file.stem + f".evidence.{ev['language']}.srt")
+            extract_track(job.video, ev["track"], tmp, ev.get("codec", "subrip"))
+            cues = cues_from_track(tmp, ev["language"])
+            tmp.unlink(missing_ok=True)
+            ev["lines"] = [[round(c.start, 2), round(c.end, 2), c.ja] for c in cues]
+            work.save(job.work_file, data)
+        except Exception as e:                                             # noqa: BLE001
+            _log(f"[merge] ⚠ evidence track unusable ({e})")
+            ev["lines"] = []
+    return [tuple(x) for x in ev["lines"]], ev["language"]
+
+
 def stage_merge(job: Job, data: dict, key: str, client) -> list[Word]:
     """Reconcile the two transcripts of every dual chunk (LLM where they disagree), time the result from the
     engines' timelines, and make it the file's transcript. `client` may be None: Qwen's text then stands."""
@@ -417,8 +452,12 @@ def stage_merge(job: Job, data: dict, key: str, client) -> list[Word]:
     by_lang: dict[str, list[dict]] = {}
     for d in entry["dual"]:
         by_lang.setdefault(d["lang"], []).append(d)
+    evidence, ev_lang = evidence_lines(job, data)
+    if evidence:
+        _log(f"[merge] evidence: {len(evidence)} {config.LANG_NAMES.get(ev_lang, ev_lang)} lines from the film's own track s:{data['evidence_track']['track']}")
     for lang, items in by_lang.items():
-        got, stats = merge.merge_chunks(items, client, lang, config.LANG_NAMES.get(lang, lang), job.genre, _log)
+        got, stats = merge.merge_chunks(items, client, lang, config.LANG_NAMES.get(lang, lang), job.genre, _log,
+                                        evidence=evidence, evidence_lang=config.LANG_NAMES.get(ev_lang, ev_lang))
         words += got
         for k, v in stats.items():
             stats_all[k] = stats_all.get(k, 0) + v
@@ -510,6 +549,61 @@ def stage_speakers(job: Job, data: dict, audio) -> list:
     work.save(job.work_file, data)
     _log(f"[speakers] {spk.summary(turns)} in {time.time() - t0:.0f}s")
     return turns
+
+
+def labels_wanted(job: Job, key: str, data: dict) -> bool:
+    """Speaker labels for a transcript that came from a text track (0.5.4): wanted when the character sheet is on
+    and some target is not the transcript's language — the labels are what let the sheet's rules of address apply
+    to a KNOWN speaker instead of a guessed one (2026-10-05: without them two translators made a father answer in
+    the feminine, consistently, in six languages)."""
+    if (job.register or "auto") == "off" or not key or key.startswith("asr"):
+        return False
+    cues = ((data.get("cues") or {}).get(key) or {}).get("cues") or []
+    if len(cues) < config.CHARACTERS_MIN_CUES:
+        return False
+    langs = {c.get("lang") for c in cues}
+    return any(t not in langs for t in job.targets)
+
+
+def stage_labels(job: Job, data: dict, key: str, prefetched=None) -> int:
+    """Label a text track's cues with speaker tags from the audio (0.5.4): the diarizer runs on the audio even though
+    nothing is transcribed (CPU, minutes), each cue takes the voice that covers most of it, and the cues are saved
+    back under their key. Returns how many cues got a label. The audio only ever answers WHICH voice; who that voice
+    is comes from the character sheet, never from how the voice sounds."""
+    from .audio import load_wav
+    entry = (data.get("cues") or {}).get(key) or {}
+    cues = [Cue.from_dict(d) for d in entry.get("cues", [])]
+    if entry.get("labelled") == config.LABELS_VERSION:
+        return sum(1 for c in cues if c.speaker)
+    spk_mode = job.speakers if (job.speakers or "off") != "off" else "auto"
+    job_spk = job.speakers
+    job.speakers = spk_mode
+    try:
+        stage_audio(job, data, need_wav=True, prefetched=prefetched)
+        audio = load_wav(job.wav)
+        stage_speakers(job, data, audio)
+        turns = usable_turns(data)
+    finally:
+        job.speakers = job_spk
+    n = 0
+    if turns:
+        for c in cues:
+            best, best_ov = "", 0.0
+            for t in turns:
+                ov = min(c.end, t.end) - max(c.start, t.start)
+                if ov > best_ov:
+                    best, best_ov = t.speaker, ov
+            if best and best_ov >= min(0.3, 0.4 * max(0.1, c.end - c.start)):
+                c.speaker = best
+                n += 1
+    entry["cues"] = [c.to_dict() for c in cues]
+    entry["labelled"] = config.LABELS_VERSION
+    entry.setdefault("stats", {})["labelled_cues"] = n
+    data["cues"][key] = entry
+    work.save(job.work_file, data)
+    _log(f"[labels] {n} of {len(cues)} cues carry a voice tag from the audio ({len({c.speaker for c in cues if c.speaker})} voice(s))"
+         if turns else "[labels] no usable speaker turns from the audio — the cues stay untagged")
+    return n
 
 
 def usable_turns(data: dict) -> list:
@@ -650,6 +744,7 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
     """The CHARACTERS rules for this target (cached per source key and target), or "" when off, too short, or the
     translator for the pair cannot take them (TranslateGemma's fixed prompt)."""
     from . import characters as ch
+    from . import lookup
     from .translate import route
     if not characters_wanted(job, cues):
         return ""
@@ -657,7 +752,8 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
     for c in cues:
         langs[c.lang] = langs.get(c.lang, 0) + 1
     src = max(langs, key=langs.get)
-    texts = [c.ja for c in cues if c.lang == src and c.ja]
+    tagged = any(c.speaker for c in cues)
+    texts = [(f"[{c.speaker}] " if c.speaker else "") + c.ja for c in cues if c.lang == src and c.ja]
     entry = data.setdefault("characters", {}).setdefault(key, {})
     chat_capable = lambda name: config.TRANSLATORS[name].prompt_style != "translategemma"     # noqa: E731
     chosen = force_model or route(src, target)
@@ -665,17 +761,27 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
         chosen = route(src, target) if chat_capable(route(src, target)) else config.DEFAULT_TRANSLATOR
     client = pool.use(chosen)
     t0 = time.time()
-    if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry:
-        entry.update({"version": config.CHARACTERS_VERSION, "source": src, "sheet": ch.build_sheet(client, texts, src, job.genre),
-                      "renderings": {}, "model": client.tr.model})
+    if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry or (tagged and "voices" not in entry):
+        facts = ""
+        if lookup.enabled(job.web_context):                # 0.5.8: what is publicly known about the title, as priors
+            ctx = lookup.media_context(job.video, job.targets)
+            data["media_context"] = {k: v for k, v in ctx.items() if k != "results"} | {"results": [{"url": r.get("url")} for r in ctx.get("results", [])]}
+            facts = lookup.facts_text(ctx)
+            _log(f"[lookup] {ctx['identity'].get('title') or ctx['identity'].get('series')}: "
+                 + (f"used ({(ctx.get('wikipedia') or {}).get('page')}, {len((ctx.get('wikipedia') or {}).get('cast', []))} cast lines, "
+                    f"{len(ctx.get('results', []))} search results{', cached' if ctx.get('cached') else ''})" if ctx.get("used") else f"not used — {ctx.get('why')}"))
+        sheet, voices = ch.build_sheet(client, texts, src, job.genre, tagged=tagged, facts=facts)
+        entry.update({"version": config.CHARACTERS_VERSION, "source": src, "sheet": sheet, "voices": voices,
+                      "renderings": {}, "model": client.tr.model, "facts_used": bool(facts)})
         work.save(job.work_file, data)
     rules = entry["renderings"].get(target)
     if rules is None:
-        rules = ch.render_sheet(client, entry["sheet"], src, target, job.genre)
+        rules = ch.render_sheet(client, entry["sheet"], src, target, job.genre, voices=entry.get("voices") or {})
         entry["renderings"][target] = rules
         work.save(job.work_file, data)
-    _log(f"[characters] {len(entry['sheet'])} character(s): {ch.summarise(entry['sheet'])}" + (f" — rules for {config.LANG_NAMES.get(target, target)}: "
-         f"{len(rules.splitlines())} line(s)" if rules else " — no rules rendered") + (f" in {time.time() - t0:.0f}s" if time.time() - t0 > 1 else " (cached)"))
+    _log(f"[characters] {len(entry['sheet'])} character(s): {ch.summarise(entry['sheet'], entry.get('voices'))}"
+         + (f" — rules for {config.LANG_NAMES.get(target, target)}: {len(rules.splitlines())} line(s)" if rules else " — no rules rendered")
+         + (f" in {time.time() - t0:.0f}s" if time.time() - t0 > 1 else " (cached)"))
     return rules
 
 
@@ -710,10 +816,14 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
     characters = stage_characters(job, data, key, cues, target, pool, force_model)   # 0.5.1: who speaks, how they address each other
     translate_cues(fresh, None, glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
                    target=target, pool=pool, force_model=force_model, characters=characters)
+    # the register repair (0.5.5): only the lines that hedge a form with a slash go to a checker of the other family
+    from .translate import repair_hedges
+    repaired = repair_hedges(fresh, target, characters, pool) if (job.register or "auto") != "off" else 0
     usage = {n: cl.usage.__dict__ for n, cl in pool.clients.items()}
     data.setdefault("translations", {})[tkey] = {"target": target, "cues": [c.to_dict() for c in fresh],
                                                   "models": sorted({cl.tr.model for cl in pool.clients.values()}),
-                                                  "usage": usage, "elapsed": round(time.time() - t0, 1)}
+                                                  "usage": usage, "elapsed": round(time.time() - t0, 1),
+                                                  "repairs": repaired, "hedged": sum(1 for c in fresh if c.flags and "hedged" in c.flags)}
     work.save(job.work_file, data)
     copied = sum(1 for c in fresh if c.flags and "copied" in c.flags)
     _log(f"[tl] {target} done in {time.time() - t0:.0f}s" + (f" ({copied} copied through)" if copied else ""))
