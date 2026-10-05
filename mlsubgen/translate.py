@@ -276,8 +276,9 @@ TRANSLATEGEMMA_USER = ("You are a professional {src} to {tgt} translator. Your g
 SPEAKER_RULE = ("Some lines start with a speaker tag like [S2]. The same tag means the same voice throughout; a different "
                 "tag is a different voice. The tags come from automatic speaker detection and can be wrong — treat them "
                 "as a hint. They say ONLY that lines come from the same or a different speaker: nothing about who the "
-                "speaker is — not their name, age, sex, status or relationship. Infer those from the dialogue itself, "
-                "never from the tag. Keep each speaker's register, politeness level and pronouns consistent from line "
+                "speaker is — not their name, age, sex, status or relationship — unless CHARACTERS says which character "
+                "a tag belongs to. Otherwise infer those from the dialogue itself, never from the tag. Keep each "
+                "speaker's register, politeness level and pronouns consistent from line "
                 "to line. Never output the tags.")
 _SPEAKER_TAG = re.compile(r"^\s*\[S\d+\]\s*")
 
@@ -289,8 +290,10 @@ def spoken(c: Cue) -> str:
 
 CHARACTERS_RULE = ("CHARACTERS lists who speaks in this film and how each of them refers to themselves and addresses the "
                    "others in {tgt}: pronouns, kin terms, titles, politeness level, and the grammatical gender of their "
-                   "own speech. Work out who is speaking in each line from the dialogue and the CONTEXT, then follow the "
-                   "sheet for that character. Never hedge gender with slashes or brackets: pick the form the sheet gives.")
+                   "own speech. Where a line starts with a voice tag like [S2] and CHARACTERS says which character that "
+                   "voice is, that IS the speaker: do not re-guess it from the words. Otherwise work out who is speaking "
+                   "from the dialogue and the CONTEXT. Then follow the sheet for that character and for the person they "
+                   "are addressing. Never hedge gender with slashes or brackets: pick the form the sheet gives.")
 
 
 def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: list[Cue],
@@ -395,6 +398,82 @@ def foreign_script(text: str, tgt: str) -> int:
             continue
         bad += 1
     return bad
+
+
+# ── the register repair (0.5.5, 2026-10-05) ───────────────────────────────────────────────────────────────
+# A translation-only model hedges where it does not know the speaker: "měl/a", "odličen/a pisec/pisateljica",
+# "ค่ะ/ครับ" on every Thai line from the 12B. A hedge is unusable on screen and it is detectable without reading
+# the language, so only the lines that carry one go to a CHECKER — a chat model of the other family where one is
+# routed (Qwen for a Gemma translation), with the source line, the translation and the CHARACTERS rules — which
+# rewrites that line with one form chosen and nothing else changed. Independence over strength: the checker's job
+# is to pick, not to retranslate.
+_HEDGE_PAIRS_OK = {"and/or", "yes/no", "on/off", "in/out", "input/output", "w/o", "m/f", "male/female", "tcp/ip", "i/o", "a/c",
+                   "km/h", "m/s", "r/min", "mph/kph", "n/a"}
+_HEDGE_STRIP = ".,!?;:\"'()[]{}«»「」…"
+
+
+def hedged(text: str) -> bool:
+    """A gender or form hedge: two word-shaped alternatives joined by a slash (měl/a, ค่ะ/ครับ, pisec/pisateljica,
+    he/she). Not URLs, fractions, dates, AC/DC, or a few fixed pairs (and/or, yes/no)."""
+    if "/" not in text or "://" in text:
+        return False
+    for tok in text.split():
+        if tok.count("/") != 1 or any(ch.isdigit() for ch in tok):
+            continue
+        a, b = (p.strip(_HEDGE_STRIP) for p in tok.split("/"))
+        if not a or not b or a.lower() == b.lower() or f"{a}/{b}".lower() in _HEDGE_PAIRS_OK:
+            continue
+        if a.isupper() and b.isupper():                        # AC/DC, NY/LA
+            continue
+        # a suffix hedge (měl/a), a short alternative (ค่ะ/ครับ, he/she — in Thai the "word" before the slash is a
+        # whole unspaced clause, so only the right side's length can be judged), or two forms of one stem
+        # (pisec/pisateljica)
+        if len(a) <= 2 or len(b) <= 5 or a[:3].lower() == b[:3].lower():
+            return True
+    return False
+
+
+REPAIR_PROMPT = ("A subtitle line was translated into {tgt} with a hedge between two forms (a slash such as \"měl/a\" or "
+                 "\"ค่ะ/ครับ\") because the translator did not know who speaks. Decide the form.{sheet} Rewrite the line "
+                 "in {tgt} with ONE form chosen and nothing else changed — same words, same meaning, same line "
+                 "breaks; no slashes, no brackets, no notes. Output only the rewritten line.\n\n"
+                 "Source ({src}): {source}\nTranslation ({tgt}): {text}")
+
+
+def repair_hedges(cues: list[Cue], target: str, characters: str, pool: "ClientPool", preferred: str = "qwen3.8") -> int:
+    """Send the hedged lines to the checker; returns how many were rewritten. Lines the checker leaves hedged are
+    kept and flagged."""
+    todo = [c for c in cues if c.en and hedged(c.en)]
+    if not todo:
+        return 0
+    name = preferred if preferred in config.TRANSLATORS and config.TRANSLATORS[preferred].prompt_style != "translategemma" else config.DEFAULT_TRANSLATOR
+    try:
+        client = pool.use(name)
+        ok, msg = client.available()
+        if not ok:
+            raise RuntimeError(msg)
+    except Exception as e:                                             # noqa: BLE001
+        _log(f"[repair] ⚠ no checker available ({e}); {len(todo)} hedged line(s) left as they are")
+        for c in todo:
+            c.flags = (c.flags or []) + ["hedged"]
+        return 0
+    fixed = 0
+    sheet = f" CHARACTERS (who speaks, how they address each other):\n{characters}\n" if characters else ""
+    for c in todo:
+        prompt = REPAIR_PROMPT.format(tgt=lang_name(target), src=lang_name(c.lang), source=c.ja, text=c.en, sheet=sheet)
+        try:
+            out = client.chat(None, prompt, max_tokens=200).strip().strip('"')
+        except Exception as e:                                         # noqa: BLE001
+            _log(f"[repair] ⚠ {e}"); c.flags = (c.flags or []) + ["hedged"]; continue
+        out = out.splitlines()[0].strip() if "\n" not in c.en else out.strip()
+        if out and not hedged(out) and not untranslated(out, c.lang, target) and not foreign_script(out, target):
+            c.en = out
+            c.flags = (c.flags or []) + ["repaired"]
+            fixed += 1
+        else:
+            c.flags = (c.flags or []) + ["hedged"]
+    _log(f"[repair] {fixed} of {len(todo)} hedged line(s) rewritten by {client.tr.model}")
+    return fixed
 
 
 def untranslated(text: str, src: str, tgt: str) -> bool:
