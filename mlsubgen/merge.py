@@ -55,11 +55,29 @@ Rules:
 - Do not add, summarise, tidy or complete anything. Punctuate naturally at sentence ends."""
 
 
-def merge_prompt(qwen_text: str, whisper_text: str, lang_name: str, genre: str, before: str) -> tuple[str, str]:
+EVIDENCE_RULE = ("\n- EVIDENCE, when given, is a human translation of these same seconds into {ev_lang} from the film's own "
+                 "subtitle track: independent of both engines. Use it to decide which engine heard a disputed word, name "
+                 "or number, and whether a line one engine has and the other lacks was really spoken. Never translate it, "
+                 "never output it: the transcript stays in {lang}, in the words that were spoken.")
+
+
+def merge_prompt(qwen_text: str, whisper_text: str, lang_name: str, genre: str, before: str,
+                 evidence: str = "", evidence_lang: str = "") -> tuple[str, str]:
     system = MERGE_SYSTEM.format(lang=lang_name, genre=genre)
+    if evidence:
+        system += EVIDENCE_RULE.format(ev_lang=evidence_lang, lang=lang_name)
     user = ((f"PRECEDING TRANSCRIPT (context only, do not output):\n{before}\n\n" if before else "")
+            + (f"EVIDENCE ({evidence_lang} subtitles for these seconds; do not output):\n{evidence}\n\n" if evidence else "")
             + f"A:\n{qwen_text}\n\nB:\n{whisper_text}\n\nReconciled transcript:")
     return system, user
+
+
+def evidence_for(evidence: list, start: float, end: float) -> str:
+    """The evidence track's lines overlapping [start, end] — (start, end, text) triples — joined in order."""
+    if not evidence:
+        return ""
+    lines = [t for s, e, t in evidence if min(e, end) - max(s, start) > 0.2]
+    return "\n".join(lines)[:1200]
 
 
 def clean_llm(text: str, lang: str) -> str:
@@ -146,10 +164,12 @@ def transfer_timing(merged: str, primary: list[Word], secondary: list[Word], sta
     return out
 
 
-def merge_chunks(dual: list[dict], client, lang: str, lang_name: str, genre: str, log) -> tuple[list[Word], dict]:
+def merge_chunks(dual: list[dict], client, lang: str, lang_name: str, genre: str, log,
+                 evidence: list | None = None, evidence_lang: str = "") -> tuple[list[Word], dict]:
     """dual: per chunk {"start", "end", "qwen": {"text", "words"}, "whisper": {"text", "words"}, "retimed"}.
-    Returns the final words for the file and the merge statistics."""
-    stats = {"agree": 0, "qwen": 0, "whisper": 0, "llm": 0, "llm_failed": 0}
+    `evidence`: (start, end, text) lines of a foreign subtitle track of the same film (0.5.6), shown to the LLM for
+    the chunks it has to reconcile. Returns the final words for the file and the merge statistics."""
+    stats = {"agree": 0, "qwen": 0, "whisper": 0, "llm": 0, "llm_failed": 0, "with_evidence": 0}
     words: list[Word] = []
     before = ""
     for ch in dual:
@@ -162,7 +182,10 @@ def merge_chunks(dual: list[dict], client, lang: str, lang_name: str, genre: str
                 verdict, text = "qwen", q["text"]
                 stats["llm_failed"] += 1
             else:
-                system, user = merge_prompt(q["text"], w["text"], lang_name, genre, before[-200:])
+                ev = evidence_for(evidence or [], ch["start"], ch["end"])
+                if ev:
+                    stats["with_evidence"] += 1
+                system, user = merge_prompt(q["text"], w["text"], lang_name, genre, before[-200:], ev, evidence_lang)
                 try:
                     text = clean_llm(client.chat(system, user, max_tokens=1024), lang)
                 except Exception as e:  # noqa: BLE001
