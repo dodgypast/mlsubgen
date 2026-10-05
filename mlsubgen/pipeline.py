@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -140,7 +141,8 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
     # English). So: listen, and keep the foreign track as evidence for the reconciler and the terms rather than as
     # the source. The audio tag is the only knowledge of the spoken language this early; a wrong tag is overridden by
     # --source or --subs.
-    if spoken and spoken in remaining and lang != spoken and not isinstance(src, Path):
+    if spoken and spoken in remaining and lang != spoken and not isinstance(src, Path) and not os.environ.get("MLSUBGEN_PREFER_TRACK"):
+        # (MLSUBGEN_PREFER_TRACK=1 is a measurement override: translate the foreign track anyway, to compare)
         data.setdefault("video", str(job.video))
         data["evidence_track"] = {"track": src.index, "codec": src.codec, "language": lang, "title": src.title,
                                   "why": f"a {config.LANG_NAMES.get(spoken, spoken)} target from {config.LANG_NAMES.get(spoken, spoken)} audio: the audio is the original"}
