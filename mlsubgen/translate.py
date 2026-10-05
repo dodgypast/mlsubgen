@@ -318,8 +318,17 @@ CHARACTERS_RULE = ("CHARACTERS lists who speaks in this film and how each of the
                    "are addressing. Never hedge gender with slashes or brackets: pick the form the sheet gives.")
 
 
+CROSS_RULE = ("EVIDENCE lines are human translations of the SAME subtitle lines into languages whose grammar marks "
+              "gender, formality or politeness. Read them to decide who is speaking to whom and how: a feminine form "
+              "in Hebrew means the speaker or the addressee is a woman, tu or vous in French means the relationship, "
+              "a polite ending in Korean means the register. They are evidence only: never translate them, never "
+              "copy their wording, never output them. They outrank a guess from the English and agree with CHARACTERS "
+              "where both exist.")
+
+
 def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: list[Cue],
-                 glossary: dict[str, str], genre: str, target: str, characters: str = "") -> tuple[str | None, str]:
+                 glossary: dict[str, str], genre: str, target: str, characters: str = "",
+                 cross: dict | None = None) -> tuple[str | None, str]:
     src = lang_name(window[0].lang)
     tgt = lang_name(target)
     tagged = any(c.speaker for c in window + before + after)
@@ -330,6 +339,9 @@ def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: li
     parts = []
     if characters:
         parts.append(f"CHARACTERS (who speaks, and how they address each other in {tgt} — follow it):\n{characters}")
+    ev_lines = [f"{c.idx + 1}\t" + " | ".join(f"[{lang}] {text}" for lang, text in cross[c.idx]) for c in window if cross and cross.get(c.idx)]
+    if ev_lines:
+        parts.append("EVIDENCE (the same lines in languages that mark gender / formality — do not output):\n" + "\n".join(ev_lines))
     if glossary:
         parts.append(f"GLOSSARY ({src} → {tgt}):\n" + "\n".join(f"{k} → {v}" for k, v in glossary.items()))
     if before:
@@ -341,6 +353,8 @@ def build_prompt(tr: Translator, window: list[Cue], before: list[Cue], after: li
     system = system_prompt(window[0].lang, target, genre)
     if characters:
         system += "\n- " + CHARACTERS_RULE.format(tgt=tgt)
+    if ev_lines:
+        system += "\n- " + CROSS_RULE
     if tagged:
         system += "\n- " + SPEAKER_RULE
     return system, "\n\n".join(parts)
@@ -517,7 +531,7 @@ def translate_cues(cues: list[Cue], client: LLMClient, glossary: dict[str, str] 
                    window_size: int = config.WINDOW_CUES, before_n: int = config.CONTEXT_BEFORE,
                    after_n: int = config.LOOKAHEAD_AFTER, progress: bool = True, checkpoint=None,
                    target: str = "en", pool: ClientPool | None = None, force_model: str | None = None,
-                   characters: str = "") -> list[Cue]:
+                   characters: str = "", cross: dict | None = None) -> list[Cue]:
     """Translate in windows into `target`. A window never mixes source languages; cues already in the target are
     copied through; the model for each window comes from the route of its language pair (via `pool`, else
     `client` handles everything). `checkpoint(cues)` runs after every window so an interrupted run loses at most
@@ -549,7 +563,7 @@ def translate_cues(cues: list[Cue], client: LLMClient, glossary: dict[str, str] 
         tr = cl.tr
         before = [c for c in cues[max(0, i - before_n):i] if c.en]
         after = cues[i + len(window):i + len(window) + after_n]
-        system, user = build_prompt(tr, window, before, after, glossary, genre, target, characters)
+        system, user = build_prompt(tr, window, before, after, glossary, genre, target, characters, cross or {})
         got = _translate_window(cl, system, user, window, target)
         missing = [c for c in window if untranslated(c.en, c.lang, target)]
         leaked = [c for c in window if c not in missing and c.en and foreign_script(c.en, target)]

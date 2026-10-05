@@ -113,6 +113,10 @@ def add_common(p: argparse.ArgumentParser) -> None:
                    help="the character sheet (0.5.1): auto = who speaks, their gender and how they address each other is worked out "
                         "once per film and given to every window in the target's terms (pronouns, kin terms, politeness, grammatical "
                         "gender); off = each window guesses")
+    p.add_argument("--cross-evidence", default="off", choices=["auto", "off"], dest="cross_evidence",
+                   help="cross-track evidence (0.5.15): auto = when a target needs gender or register, the film's own human tracks "
+                        "in languages that mark it (Hebrew for gender, French for tu/vous, Korean for politeness) are shown to the "
+                        "translator line by line as evidence, never output. Default off until it measures a gain")
     p.add_argument("--web-context", default=None, choices=["auto", "off"], dest="web_context",
                    help="OPT-IN (0.5.8): auto = look the title up (Wikipedia, then SearXNG at MLSUBGEN_SEARXNG_URL, then the Brave API "
                         "with BRAVE_API_KEY) and give the character sheet the cast, relationships and localised titles as priors; "
@@ -394,7 +398,7 @@ def cmd_run(a: argparse.Namespace) -> int:
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
                  a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr, terms=a.terms,
-                 register=a.register, web_context=a.web_context) for v, want in todo]
+                 register=a.register, web_context=a.web_context, cross_evidence=a.cross_evidence) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -919,7 +923,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
               a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms,
-              register=a.register, web_context=a.web_context)
+              register=a.register, web_context=a.web_context, cross_evidence=a.cross_evidence)
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
     key = asr_key_for(engines, context, a.asr)
@@ -1618,6 +1622,9 @@ def cmd_why(a: argparse.Namespace) -> int:
     ev = data.get("evidence_track")
     if ev:
         print(f"  evidence: {config.LANG_NAMES.get(ev.get('language'), ev.get('language'))} track s:{ev.get('track')} kept as evidence, not as the source — {ev.get('why')}")
+    for tgt, x in (data.get("cross_evidence") or {}).items():
+        print(f"  cross-track evidence for {config.LANG_NAMES.get(tgt, tgt)}: "
+              + ", ".join(f"{config.LANG_NAMES.get(c, c)} s:{i}" for c, i in (x.get("tracks") or {}).items()) + f" → {x.get('cues')} cues had human lines marking gender/register")
     for ck, cs in (data.get("cues") or {}).items():
         if cs.get("labelled"):
             print(f"  labels: {cs.get('stats', {}).get('labelled_cues', 0)} of {cs.get('cue_count', len(cs.get('cues', [])))} cues carry a voice tag from the audio (text-track source)")
@@ -1648,7 +1655,7 @@ def cmd_why(a: argparse.Namespace) -> int:
         print(f"  {config.LANG_NAMES.get(target, target)}: {t.get('cue_count', len(t.get('cues', [])))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
               + (f", {copied} copied through" if copied else "") + (" — PARTIAL (interrupted)" if t.get("partial") else "")
               + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if "|terms" in tkey else "")
-              + (" — with the character sheet" if tkey.endswith("|chars") else "")
+              + (" — with the character sheet" if "|chars" in tkey else "") + (" — with cross-track evidence" if tkey.endswith("|xev") else "")
               + (f" — {t['repairs']} hedged line(s) repaired by the checker" if t.get("repairs") else "")
               + (f" — {t['hedged']} still hedged" if t.get("hedged") else "")
               + f"; {state}")
@@ -2236,6 +2243,24 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _lk.identify(Path("/x/home video.mkv"))["confidence"] < 0.6
     assert not _lk.enabled(None) and not _lk.enabled("off") and _lk.enabled("auto"), "the lookup is opt-in"
     assert _lk.facts_text({"used": False}) == ""
+    # cross-track evidence (0.5.15): the picker takes the first track per need, never the target or the source, at
+    # most two; the prompt carries the lines beside the window and the rule
+    from .pipeline import pick_evidence_tracks
+    class _T:
+        def __init__(self, i, lang, title="", text=True): self.index, self.language, self.title, self.is_text, self.codec = i, lang, title, text, "subrip"
+    _subs = [_T(0, "eng"), _T(1, "ara"), _T(2, "bul"), _T(3, "tha"), _T(4, "fre"), _T(5, "heb", "SDH"), _T(6, "heb"), _T(7, "kor"), _T(8, "jpn", text=False), _T(9, "ger")]
+    _pick = [t.index for t in pick_evidence_tracks(_subs, "th", "en")]
+    assert _pick == [6, 4], _pick                       # ranked (0.5.16): Hebrew for gender over Arabic and Bulgarian earlier in the file, French for formality
+    assert [t.index for t in pick_evidence_tracks(_subs, "he", "en")] == [3], "a Hebrew target: gender from the best-ranked marker left (Thai over Bulgarian and Arabic), never its own track"
+    assert not any(t.language == "tha" for t in pick_evidence_tracks(_subs, "th", "en"))
+    assert pick_evidence_tracks(_subs, "en", "ja") == [] and pick_evidence_tracks([], "th", "en") == []
+    from .translate import build_prompt as _bp, Translator as _Tr
+    from .segment import Cue as _SegCue
+    _w = [_SegCue(0, 0.0, 1.0, "Are you coming?", "", lang="en"), _SegCue(1, 1.0, 2.0, "Yes.", "", lang="en")]
+    _s, _u = _bp(_Tr("gemma4", "gemma4:31b-it-qat"), _w, [], [], {}, "a film", "th", "", {0: [("Hebrew", "את באה?"), ("French", "Tu viens ?")]})
+    assert "EVIDENCE" in _u and "[Hebrew] את באה?" in _u and "[French] Tu viens ?" in _u and "EVIDENCE lines are human translations" in _s
+    _s2, _u2 = _bp(_Tr("gemma4", "gemma4:31b-it-qat"), _w, [], [], {}, "a film", "th", "", {})
+    assert "EVIDENCE" not in _u2 and "EVIDENCE" not in _s2
     # an ad-hoc --model tag is a chat model as far as the terms and the sheet know (the burn-in's KeyError, 0.5.13)
     from .pipeline import translation_only
     assert translation_only("translategemma") and translation_only("translategemma-4b")

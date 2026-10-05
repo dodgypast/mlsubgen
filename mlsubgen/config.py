@@ -390,6 +390,43 @@ TERMS_MIN_OCCURRENCES = 2      # a candidate must occur this often in the transc
 TERMS_MAX = 60                 # the most frequent terms are kept; the glossary goes into every window's prompt
 TERMS_CHUNK_CHARS = 6000       # transcript text per extraction call (up to four calls, spread over a long film)
 
+# ── Cross-track evidence (0.5.15, 2026-10-05): the film's own human tracks in languages that MARK what the target
+# needs. A Hebrew track says per line whether "you" is masculine or feminine and whether the speaker is a man or a
+# woman; a French, German or Spanish track says tu or vous, which is the relationship; a Korean or Japanese track
+# says the politeness level. A human translator answered the exact question for the exact line, and the answer is
+# in the same container. What each evidence language marks, and what each target needs; the picker takes the first
+# available track per need, at most CROSS_EVIDENCE_MAX tracks, never the target or the source itself.
+EVIDENCE_MARKS: dict[str, set[str]] = {
+    "he": {"gender"}, "ar": {"gender", "formality"}, "hi": {"gender", "formality"}, "bn": {"formality"}, "ta": {"gender", "formality"},
+    "fr": {"formality"}, "de": {"formality"}, "es": {"formality"}, "it": {"formality"}, "pt": {"formality"}, "nl": {"formality"},
+    "ru": {"gender", "formality"}, "pl": {"gender", "formality"}, "cs": {"gender", "formality"}, "sk": {"gender", "formality"},
+    "sl": {"gender", "formality"}, "hr": {"gender", "formality"}, "bg": {"gender", "formality"}, "uk": {"gender", "formality"},
+    "el": {"gender", "formality"}, "ro": {"formality"}, "hu": {"formality"}, "fi": {"formality"}, "tr": {"formality"},
+    "ko": {"politeness"}, "ja": {"politeness", "gender"}, "th": {"politeness", "gender"}, "vi": {"relationship"}, "id": {"politeness"},
+}
+TARGET_NEEDS: dict[str, set[str]] = {
+    "th": {"gender", "politeness"}, "ja": {"politeness", "gender"}, "ko": {"politeness"}, "vi": {"relationship", "politeness"},
+    "id": {"politeness"}, "ms": {"politeness"}, "my": {"politeness", "gender"}, "km": {"politeness"}, "lo": {"politeness"},
+    "he": {"gender"}, "ar": {"gender", "formality"}, "fa": {"formality"}, "hi": {"gender", "formality"}, "bn": {"formality"}, "ta": {"gender", "formality"},
+    "fr": {"formality"}, "de": {"formality"}, "es": {"formality"}, "it": {"formality"}, "pt": {"formality"}, "nl": {"formality"},
+    "ru": {"gender", "formality"}, "pl": {"gender", "formality"}, "cs": {"gender", "formality"}, "sk": {"gender", "formality"},
+    "sl": {"gender", "formality"}, "hr": {"gender", "formality"}, "bg": {"gender", "formality"}, "uk": {"gender", "formality"},
+    "el": {"gender", "formality"}, "ro": {"formality"}, "hu": {"formality"}, "fi": {"formality"}, "et": {"formality"},
+    "lt": {"gender", "formality"}, "lv": {"gender", "formality"}, "tr": {"formality"}, "sv": {"formality"}, "da": {"formality"}, "no": {"formality"},
+}
+# "politeness" (Korean/Japanese levels) and "formality" (tu/vous) are the same question asked by different grammars
+EVIDENCE_EQUIV = {"politeness": {"politeness", "formality"}, "formality": {"formality", "politeness"}, "relationship": {"relationship", "formality", "politeness"}}
+CROSS_EVIDENCE_MAX = 2         # tracks per target
+CROSS_EVIDENCE_VERSION = 2     # part of the cache key (2: ranked picker)
+# How well the translator reads the marking (2026-10-05): the first picker took the file's track order and got
+# Arabic and Bulgarian for Thai (no gain: 44.5 → 43.5, 36.1 → 36.2 chrF++ on two films); the ranked picker prefers
+# the languages whose gender and formality marking a chat model reads most reliably. Lower rank wins.
+EVIDENCE_RANK: dict[str, int] = {
+    "he": 0, "fr": 1, "de": 2, "es": 3, "it": 4, "pt": 5, "ko": 6, "ja": 7, "nl": 8, "ru": 9, "pl": 10, "cs": 11,
+    "th": 12, "vi": 13, "el": 14, "ro": 15, "hu": 16, "fi": 17, "tr": 18, "uk": 19, "hr": 20, "sk": 21, "sl": 22,
+    "bg": 23, "id": 24, "hi": 25, "ar": 26, "ta": 27, "bn": 28,
+}
+
 # ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
 CHARACTERS_VERSION = 3         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
                                #  3: a voice maps to a character only with a quoted line behind it)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,8 @@ class Job:
     terms: str = "auto"              # --terms auto | off (0.5.1): the film's names rendered once and fed to every window
     register: str = "auto"           # --register auto | off (0.5.1): the character sheet — who speaks, how they address each other
     web_context: str | None = None   # --web-context auto | off (0.5.8, opt-in): what is publicly known about the title, as priors
+    cross_evidence: str = "off"      # --cross-evidence auto | off (0.5.15): the film's own human tracks that mark gender/register;
+                                     # off until a measured gain (0.5.16: the first picker showed none)
 
     @property
     def work_file(self) -> Path:
@@ -756,6 +759,86 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
     return glossary
 
 
+# ── stage 1d: cross-track evidence (0.5.15) ────────────────────────────────────────────────────────────────
+def pick_evidence_tracks(subs: list, target: str, source: str) -> list:
+    """The file's text tracks that mark what `target` needs, one per need, at most CROSS_EVIDENCE_MAX, never the
+    target's own language (that track is the subtitles, not evidence) nor the source's. Order: the needs in the
+    order listed, the tracks in the file's order; a track covering two needs counts once."""
+    needs = config.TARGET_NEEDS.get(target)
+    if not needs:
+        return []
+    chosen: list = []
+    covered: set[str] = set()
+    # candidates ranked by how reliably the marking is read (EVIDENCE_RANK), not by the file's track order
+    cands = []
+    for t in subs:
+        if not t.is_text or re.search(r"sdh|forced|commentary", t.title or "", re.I):
+            continue
+        code = code_for_tag(t.language) or ""
+        if code in (target, source) or code not in config.EVIDENCE_MARKS:
+            continue
+        cands.append((config.EVIDENCE_RANK.get(code, 99), t.index, code, t))
+    cands.sort(key=lambda x: (x[0], x[1]))
+    for need in sorted(needs):
+        if need in covered:
+            continue
+        eq = config.EVIDENCE_EQUIV.get(need, {need})
+        for _, _, code, t in cands:
+            if any(x.index == t.index for x in chosen):
+                continue
+            if config.EVIDENCE_MARKS[code] & eq:
+                chosen.append(t)
+                covered |= config.EVIDENCE_MARKS[code] & needs
+                break
+        if len(chosen) >= config.CROSS_EVIDENCE_MAX:
+            break
+    return chosen
+
+
+def stage_cross_evidence(job: Job, data: dict, key: str, cues: list[Cue], target: str) -> dict[int, list[tuple[str, str]]]:
+    """Per cue, the human lines of the chosen evidence tracks for the same seconds: {cue idx: [(lang, text), ...]}.
+    Tracks are extracted once and cached in the work file under cross_tracks; the choice per target is recorded."""
+    if (job.register or "auto") == "off" or (job.cross_evidence or "off") != "auto":
+        return {}
+    langs: dict[str, int] = {}
+    for c in cues:
+        langs[c.lang] = langs.get(c.lang, 0) + 1
+    src = max(langs, key=langs.get) if langs else ""
+    pr = probe(job.video, job.audio_track)
+    tracks = pick_evidence_tracks(pr.subs, target, src)
+    if not tracks:
+        return {}
+    store = data.setdefault("cross_tracks", {})
+    lines_by_lang: dict[str, list] = {}
+    for t in tracks:
+        code = code_for_tag(t.language) or t.language
+        ent = store.get(code)
+        if not ent or ent.get("track") != t.index:
+            try:
+                tmp = job.tmp_dir / (job.work_file.stem + f".xev.{code}.srt")
+                extract_track(job.video, t.index, tmp, t.codec)
+                got = cues_from_track(tmp, code)
+                tmp.unlink(missing_ok=True)
+                ent = {"track": t.index, "lines": [[round(c.start, 2), round(c.end, 2), c.ja] for c in got]}
+            except Exception as e:                                             # noqa: BLE001
+                _log(f"[evidence] ⚠ {config.LANG_NAMES.get(code, code)} track s:{t.index} unusable ({e})")
+                continue
+            store[code] = ent
+        lines_by_lang[code] = ent["lines"]
+    work.save(job.work_file, data)
+    out: dict[int, list[tuple[str, str]]] = {}
+    for c in cues:
+        for code, lines in lines_by_lang.items():
+            hits = [t for s, e, t in lines if min(e, c.end) - max(s, c.start) > 0.25]
+            if hits:
+                out.setdefault(c.idx, []).append((config.LANG_NAMES.get(code, code), " ".join(hits)[:200]))
+    data.setdefault("cross_evidence", {})[target] = {"tracks": {code: store[code]["track"] for code in lines_by_lang}, "cues": len(out),
+                                                     "version": config.CROSS_EVIDENCE_VERSION}
+    used = ", ".join(f"{config.LANG_NAMES.get(c, c)} s:{store[c]['track']}" for c in lines_by_lang)
+    _log(f"[evidence] {used} → {len(out)} of {len(cues)} cues have human lines marking what {config.LANG_NAMES.get(target, target)} needs")
+    return out
+
+
 # ── stage 1e: the title lookup (0.5.8, opt-in) ─────────────────────────────────────────────────────────────
 def stage_lookup(job: Job, data: dict) -> dict:
     """What is publicly known about the title, once per file, kept in the work file with every query recorded.
@@ -823,7 +906,8 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
 # ── stage 2: translation per target ───────────────────────────────────────────────────────────────────────
 def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str, pool: ClientPool,
                     force: bool = False, force_model: str | None = None) -> list[Cue]:
-    tkey = f"{key}|{target}" + ("|terms" if terms_wanted(job, cues) else "") + ("|chars" if characters_wanted(job, cues) else "")
+    tkey = (f"{key}|{target}" + ("|terms" if terms_wanted(job, cues) else "") + ("|chars" if characters_wanted(job, cues) else "")
+            + ("|xev" if (job.register or "auto") != "off" and (job.cross_evidence or "off") == "auto" and target in config.TARGET_NEEDS else ""))
     cached = (data.get("translations") or {}).get(tkey)
     partial = bool(cached and cached.get("partial"))
     if cached and not partial and not force:
@@ -850,8 +934,9 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
     stage_lookup(job, data)                                                       # 0.5.8: the title's public facts (opt-in)
     glossary = stage_terms(job, data, key, cues, target, pool, force_model)      # 0.5.1: names rendered once, up front
     characters = stage_characters(job, data, key, cues, target, pool, force_model)   # 0.5.1: who speaks, how they address each other
+    cross = stage_cross_evidence(job, data, key, cues, target)                     # 0.5.15: the film's own tracks that mark gender/register
     translate_cues(fresh, None, glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
-                   target=target, pool=pool, force_model=force_model, characters=characters)
+                   target=target, pool=pool, force_model=force_model, characters=characters, cross=cross)
     # the register repair (0.5.5): only the lines that hedge a form with a slash go to a checker of the other family
     from .translate import repair_hedges
     repaired = repair_hedges(fresh, target, characters, pool) if (job.register or "auto") != "off" else 0
