@@ -126,6 +126,28 @@ class LLMClient:
             hint = "  (sudo systemctl start ollama ?)" if self.backend == "ollama" else ""
             return False, f"{self.backend} at {self.url} unreachable: {e}{hint}"
 
+    _digests: dict[str, str] = {}
+
+    def digest(self) -> str:
+        """The model's content digest from Ollama (0.5.9): a tag re-pulled is a different model, so every record
+        of a translation pins the digest beside the tag. Empty for other backends or when the server has no answer."""
+        if self.backend != "ollama":
+            return ""
+        key = f"{self.url}|{self.tr.model}"
+        if key not in LLMClient._digests:
+            d = ""
+            try:
+                req = urllib.request.Request(self.url + "/api/tags")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    tags = json.loads(resp.read().decode("utf-8"))
+                for m in tags.get("models", []):
+                    if m.get("name") in (self.tr.model, self.tr.model + ":latest"):
+                        d = str(m.get("digest", ""))[:12]; break
+            except Exception:                              # noqa: BLE001
+                d = ""
+            LLMClient._digests[key] = d
+        return LLMClient._digests[key]
+
     def chat(self, system: str | None, user: str, max_tokens: int = 4096, nudge: bool = False) -> str:
         """One chat completion. nudge=True re-samples with a fresh seed, more temperature and a repeat penalty —
         used only to retry a window the server aborted for looping."""

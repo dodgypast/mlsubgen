@@ -106,13 +106,34 @@ def paths_ready(paths: list[str], mounts: list[str] | None = None, roots: list[s
 
 
 def gpu_ready() -> str | None:
+    """The card is visible, has room, and nobody else holds it (0.5.9, 2026-10-05). Visibility alone let a job start
+    while another program had the memory; now the free memory must cover the profile's larger stage (the speech
+    engines on a full card, ~10 GB; MLSUBGEN_GPU_FREE_GB overrides), and an optional lease hook —
+    MLSUBGEN_GPU_LEASE_CMD, any command whose non-zero exit means "the card is held" — lets another scheduler on the
+    same machine keep the worker waiting. A wait, not a failure: the job stays queued and is retried on the deadline
+    the runner already keeps for mounts and the LLM server."""
     if not any(os.access(os.path.join(d, "nvidia-smi"), os.X_OK) for d in os.environ.get("PATH", "").split(":")):
         return None                                        # no nvidia-smi: nothing to check
     try:
-        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=30)
-        return None if r.returncode == 0 else f"nvidia-smi failed: {(r.stderr or r.stdout).strip()[:120]}"
-    except (OSError, subprocess.TimeoutExpired) as e:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.free,memory.total", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return f"nvidia-smi failed: {(r.stderr or r.stdout).strip()[:120]}"
+        free_mb, total_mb = (int(x.strip()) for x in r.stdout.strip().splitlines()[0].split(",")[:2])
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as e:
         return f"nvidia-smi: {e}"
+    need_gb = float(os.environ.get("MLSUBGEN_GPU_FREE_GB") or (10.0 if total_mb >= 20000 else 8.0 if total_mb >= 11000 else 5.0))
+    if free_mb / 1024 < need_gb:
+        return f"GPU has {free_mb / 1024:.1f} GB free of {total_mb / 1024:.0f}; {need_gb:.0f} GB needed — something else holds it"
+    cmd = os.environ.get("MLSUBGEN_GPU_LEASE_CMD")
+    if cmd:
+        try:
+            lr = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            if lr.returncode != 0:
+                return f"GPU lease hook says the card is held ({(lr.stdout or lr.stderr).strip()[:80] or 'exit ' + str(lr.returncode)})"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"GPU lease hook: {e}"
+    return None
 
 
 def llm_ready(opts: list[str]) -> str | None:

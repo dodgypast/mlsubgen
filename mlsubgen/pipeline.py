@@ -728,10 +728,38 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
         entry["renderings"][target] = rendered
         work.save(job.work_file, data)
     glossary = tm.build_glossary(rendered, job.glossary)
+    # the title in the target language from the lookup (0.5.8), when it is on and found: a fact, ahead of any rendering
+    mc = data.get("media_context") or {}
+    if mc.get("used"):
+        wp = mc.get("wikipedia") or {}
+        page, local = wp.get("page", ""), (wp.get("titles") or {}).get(target)
+        if page and local and local != page:
+            glossary.setdefault(page.split(" (")[0], local)
     _log(f"[terms] {len(terms)} recurring term(s) in the {config.LANG_NAMES.get(src, src)} transcript, {len(rendered)} rendered "
          f"for {config.LANG_NAMES.get(target, target)}" + (f" in {time.time() - t0:.0f}s" if time.time() - t0 > 1 else " (cached)")
          + (f": {tm.summarise(entry['terms'], rendered)}" if terms else ""))
     return glossary
+
+
+# ── stage 1e: the title lookup (0.5.8, opt-in) ─────────────────────────────────────────────────────────────
+def stage_lookup(job: Job, data: dict) -> dict:
+    """What is publicly known about the title, once per file, kept in the work file with every query recorded.
+    Off unless --web-context auto. The terms pass reads the localised title from it; the sheet reads the cast."""
+    from . import lookup
+    if not lookup.enabled(job.web_context):
+        return {}
+    if data.get("media_context"):
+        return data["media_context"]
+    ctx = lookup.media_context(job.video, job.targets)
+    kept = {k: v for k, v in ctx.items() if k != "results"}
+    kept["results"] = [{"url": r.get("url"), "snippet": r.get("snippet", "")[:300]} for r in ctx.get("results", [])]
+    data["media_context"] = kept
+    work.save(job.work_file, data)
+    wp = ctx.get("wikipedia") or {}
+    _log(f"[lookup] {ctx['identity'].get('title') or ctx['identity'].get('series')}: "
+         + (f"used ({wp.get('page')}, {len(wp.get('cast', []))} cast lines, {len(wp.get('titles') or {})} localised titles, "
+            f"{len(ctx.get('results', []))} search results{', cached' if ctx.get('cached') else ''})" if ctx.get("used") else f"not used — {ctx.get('why')}"))
+    return kept
 
 
 # ── stage 1f: the character sheet (0.5.1) ─────────────────────────────────────────────────────────────────
@@ -762,14 +790,7 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
     client = pool.use(chosen)
     t0 = time.time()
     if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry or (tagged and "voices" not in entry):
-        facts = ""
-        if lookup.enabled(job.web_context):                # 0.5.8: what is publicly known about the title, as priors
-            ctx = lookup.media_context(job.video, job.targets)
-            data["media_context"] = {k: v for k, v in ctx.items() if k != "results"} | {"results": [{"url": r.get("url")} for r in ctx.get("results", [])]}
-            facts = lookup.facts_text(ctx)
-            _log(f"[lookup] {ctx['identity'].get('title') or ctx['identity'].get('series')}: "
-                 + (f"used ({(ctx.get('wikipedia') or {}).get('page')}, {len((ctx.get('wikipedia') or {}).get('cast', []))} cast lines, "
-                    f"{len(ctx.get('results', []))} search results{', cached' if ctx.get('cached') else ''})" if ctx.get("used") else f"not used — {ctx.get('why')}"))
+        facts = lookup.facts_text(data.get("media_context") or {})       # 0.5.8: the title's public facts, as priors
         sheet, voices = ch.build_sheet(client, texts, src, job.genre, tagged=tagged, facts=facts)
         entry.update({"version": config.CHARACTERS_VERSION, "source": src, "sheet": sheet, "voices": voices,
                       "renderings": {}, "model": client.tr.model, "facts_used": bool(facts)})
@@ -812,6 +833,7 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
         data.setdefault("translations", {})[tkey] = {"target": target, "partial": True, "cues": [c.to_dict() for c in cs]}
         work.save(job.work_file, data)
 
+    stage_lookup(job, data)                                                       # 0.5.8: the title's public facts (opt-in)
     glossary = stage_terms(job, data, key, cues, target, pool, force_model)      # 0.5.1: names rendered once, up front
     characters = stage_characters(job, data, key, cues, target, pool, force_model)   # 0.5.1: who speaks, how they address each other
     translate_cues(fresh, None, glossary, job.genre, window_size=job.window, checkpoint=checkpoint,
@@ -822,6 +844,7 @@ def stage_translate(job: Job, data: dict, key: str, cues: list[Cue], target: str
     usage = {n: cl.usage.__dict__ for n, cl in pool.clients.items()}
     data.setdefault("translations", {})[tkey] = {"target": target, "cues": [c.to_dict() for c in fresh],
                                                   "models": sorted({cl.tr.model for cl in pool.clients.values()}),
+                                                  "digests": {cl.tr.model: cl.digest() for cl in pool.clients.values()},
                                                   "usage": usage, "elapsed": round(time.time() - t0, 1),
                                                   "repairs": repaired, "hedged": sum(1 for c in fresh if c.flags and "hedged" in c.flags)}
     work.save(job.work_file, data)
