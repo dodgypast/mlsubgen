@@ -687,6 +687,14 @@ def stage_cues(job: Job, data: dict, key: str, words: list[Word], spans: list[Sp
 
 
 # ── stage 1e: terminology (0.5.1) ─────────────────────────────────────────────────────────────────────────
+def translation_only(name: str | None) -> bool:
+    """A translator whose fixed prompt takes no glossary and no sheet (TranslateGemma). An ad-hoc `--model TAG` or an
+    unknown name is a chat model as far as anyone knows (2026-10-05: a KeyError here killed a run whose --model was
+    not a preset — the burn-in's one failure)."""
+    tr = config.TRANSLATORS.get(name or "")
+    return bool(tr) and tr.prompt_style == "translategemma"
+
+
 def terms_wanted(job: Job, cues: list[Cue]) -> bool:
     return (job.terms or "auto") != "off" and len(cues) >= config.TERMS_MIN_CUES
 
@@ -710,16 +718,15 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
     _langs = {}
     for c in cues:
         _langs[c.lang] = _langs.get(c.lang, 0) + 1
-    if _langs and config.TRANSLATORS[force_model or _route(max(_langs, key=_langs.get), target)].prompt_style == "translategemma":
+    if _langs and translation_only(force_model or _route(max(_langs, key=_langs.get), target)):
         return {}                                      # its prompt takes no glossary at all, the user's included
     entry = data.setdefault("terms", {}).setdefault(key, {})
     # extracting and rendering terms is a chat task, not a translation: a translation-only model (TranslateGemma)
     # translates the question and nothing parses (2026-10-04: "60 terms, 0 rendered" for 44 languages). So the
     # pair's default route does this stage even when a translator is forced for the subtitles themselves.
-    chat_capable = lambda name: config.TRANSLATORS[name].prompt_style != "translategemma"     # noqa: E731
     chosen = force_model or route(src, target)
-    if not chat_capable(chosen):
-        chosen = route(src, target) if chat_capable(route(src, target)) else config.DEFAULT_TRANSLATOR
+    if translation_only(chosen):
+        chosen = route(src, target) if not translation_only(route(src, target)) else config.DEFAULT_TRANSLATOR
     client = pool.use(chosen)
     t0 = time.time()
     if entry.get("version") != config.TERMS_VERSION or "terms" not in entry:
@@ -791,10 +798,9 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
     tagged = any(c.speaker for c in cues)
     texts = [(f"[{c.speaker}] " if c.speaker else "") + c.ja for c in cues if c.lang == src and c.ja]
     entry = data.setdefault("characters", {}).setdefault(key, {})
-    chat_capable = lambda name: config.TRANSLATORS[name].prompt_style != "translategemma"     # noqa: E731
     chosen = force_model or route(src, target)
-    if not chat_capable(chosen):
-        chosen = route(src, target) if chat_capable(route(src, target)) else config.DEFAULT_TRANSLATOR
+    if translation_only(chosen):
+        chosen = route(src, target) if not translation_only(route(src, target)) else config.DEFAULT_TRANSLATOR
     client = pool.use(chosen)
     t0 = time.time()
     if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry or (tagged and "voices" not in entry):

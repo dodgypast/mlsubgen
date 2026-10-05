@@ -409,7 +409,10 @@ def cmd_run(a: argparse.Namespace) -> int:
         if not a.keep_wav:
             job.wav.unlink(missing_ok=True)
         if work_file and not a.keep_work:
-            job.work_file.unlink(missing_ok=True)
+            # the record outlives the run (0.5.13): the work file is condensed to its provenance — what `why` answers
+            # from — rather than deleted; the ASR words, cues and translated text go, a few KB stay (the 2026-10-05
+            # burn-in asked `why` about a finished file and was told it had never been processed)
+            work.condense(job.work_file)
 
     def skip(job: Job, reason: str, remember: bool = True) -> None:
         if reason.startswith(job.video.name + ": "):
@@ -497,7 +500,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         try:
             for i, job in enumerate(batch):
                 prefetch_after(i, batch)
-                data = work.load(job.work_file)
+                data = work.reopen(work.load(job.work_file))      # a condensed record keeps its complete caches only
                 _log(f"\n=== {job.video.name}")
                 rem = remembered_skip(job)
                 if rem:
@@ -1588,8 +1591,8 @@ def cmd_why(a: argparse.Namespace) -> int:
             print(f"  languages: {lid_d.get('summary', '?')}")
     spk = data.get("speakers")
     if spk:
-        voices = len({t[2] for t in spk.get('turns', [])})
-        print(f"  speakers: diarized ({spk.get('mode')}, {voices} voices, {len(spk.get('turns', []))} turns, {spk.get('embedding', '?')[:-5] if spk.get('embedding') else '?'})")
+        voices = spk.get("voices", len({t[2] for t in spk.get('turns', [])}))
+        print(f"  speakers: diarized ({spk.get('mode')}, {voices} voices, {spk.get('turn_count', len(spk.get('turns', [])))} turns, {spk.get('embedding', '?')[:-5] if spk.get('embedding') else '?'})")
     for k, g in gate.items():
         if k != f"s:{src.get('ocr_track')}":
             print(f"  OCR {k} ({config.LANG_NAMES.get(g.get('language'), g.get('language'))}): {'used' if g.get('usable') else 'rejected'} — {g.get('why')}")
@@ -1607,7 +1610,7 @@ def cmd_why(a: argparse.Namespace) -> int:
         print(f"  evidence: {config.LANG_NAMES.get(ev.get('language'), ev.get('language'))} track s:{ev.get('track')} kept as evidence, not as the source — {ev.get('why')}")
     for ck, cs in (data.get("cues") or {}).items():
         if cs.get("labelled"):
-            print(f"  labels: {cs.get('stats', {}).get('labelled_cues', 0)} of {len(cs.get('cues', []))} cues carry a voice tag from the audio (text-track source)")
+            print(f"  labels: {cs.get('stats', {}).get('labelled_cues', 0)} of {cs.get('cue_count', len(cs.get('cues', [])))} cues carry a voice tag from the audio (text-track source)")
     for key, t in (data.get("terms") or {}).items():
         print(f"  terms: {len(t.get('terms', []))} recurring term(s), rendered for {', '.join(t.get('renderings', {}).keys()) or 'nothing yet'} ({t.get('model')})")
     for key, c in (data.get("characters") or {}).items():
@@ -1626,13 +1629,13 @@ def cmd_why(a: argparse.Namespace) -> int:
     cue_sets = data.get("cues") or {}
     for tkey, t in (data.get("translations") or {}).items():
         target = t.get("target")
-        copied = sum(1 for c in t.get("cues", []) if c.get("flags") and "copied" in c["flags"])
+        copied = t.get("copied", sum(1 for c in t.get("cues", []) if c.get("flags") and "copied" in c["flags"]))
         out = srt_path_for(video, target)
         if job.clip:
             state = "a clip: the output is a bench page, not a sidecar"
         else:
             state = ("written " + time.strftime("%Y-%m-%d %H:%M", time.localtime(out.stat().st_mtime))) if out.is_file() else "no .srt beside the video"
-        print(f"  {config.LANG_NAMES.get(target, target)}: {len(t.get('cues', []))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
+        print(f"  {config.LANG_NAMES.get(target, target)}: {t.get('cue_count', len(t.get('cues', [])))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
               + (f", {copied} copied through" if copied else "") + (" — PARTIAL (interrupted)" if t.get("partial") else "")
               + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if "|terms" in tkey else "")
               + (" — with the character sheet" if tkey.endswith("|chars") else "")
@@ -2223,6 +2226,33 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _lk.identify(Path("/x/home video.mkv"))["confidence"] < 0.6
     assert not _lk.enabled(None) and not _lk.enabled("off") and _lk.enabled("auto"), "the lookup is opt-in"
     assert _lk.facts_text({"used": False}) == ""
+    # an ad-hoc --model tag is a chat model as far as the terms and the sheet know (the burn-in's KeyError, 0.5.13)
+    from .pipeline import translation_only
+    assert translation_only("translategemma") and translation_only("translategemma-4b")
+    assert not translation_only("gemma4") and not translation_only("nonexistent:tag") and not translation_only(None)
+    # a finished file's work file condenses to its provenance and reopens as caches only (0.5.13)
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        _p = Path(_td) / "x.json"
+        work.save(_p, {"video": "/x/v.mkv", "duration": 600.0, "source": {"embedded_subtitles": 0, "language": "en"},
+                       "speakers": {"mode": "auto", "turns": [[0, 1, "S1"], [1, 2, "S2"], [2, 3, "S1"]]},
+                       "asr": {"k": {"engines": "dual", "words": [{"text": "a"}] * 50, "dual": [1, 2, 3], "merge_stats": {"agree": 3}}},
+                       "cues": {"ck": {"cues": [{"idx": i} for i in range(40)], "stats": {"labelled_cues": 38}, "labelled": 1}},
+                       "terms": {"ck": {"terms": [["Will", 11]], "renderings": {"th": {"Will": "วิล"}}}},
+                       "characters": {"ck": {"sheet": [{"name": "Will"}], "voices": {}, "renderings": {"th": "rules"}}},
+                       "translations": {"ck|th": {"target": "th", "cues": [{"idx": 0, "en": "x", "flags": ["copied"]}, {"idx": 1, "en": "y"}],
+                                                  "models": ["gemma4:31b-it-qat"], "elapsed": 9.0, "repairs": 1}},
+                       "evidence_track": {"track": 3, "language": "it", "lines": [[0, 1, "ciao"]] * 20}})
+        work.condense(_p)
+        _c = work.load(_p)
+        assert _c.get("condensed") and "words" not in _c["asr"]["k"] and _c["asr"]["k"]["merge_stats"] == {"agree": 3}
+        assert _c["cues"]["ck"]["cue_count"] == 40 and _c["cues"]["ck"]["stats"]["labelled_cues"] == 38 and "cues" not in _c["cues"]["ck"]
+        assert _c["translations"]["ck|th"]["cue_count"] == 2 and _c["translations"]["ck|th"]["copied"] == 1 and "cues" not in _c["translations"]["ck|th"]
+        assert _c["speakers"]["voices"] == 2 and _c["speakers"]["turn_count"] == 3 and "turns" not in _c["speakers"]
+        assert _c["evidence_track"]["line_count"] == 20 and "lines" not in _c["evidence_track"] and _p.stat().st_size < 3000
+        _r = work.reopen(_c)
+        assert "asr" not in _r and "cues" not in _r and "translations" not in _r and _r["terms"] and _r["characters"] and "condensed" not in _r
+        assert work.reopen({"asr": {"k": {"words": []}}}) == {"asr": {"k": {"words": []}}}, "an uncondensed file is untouched"
     # --speakers has three meanings (0.5.10): labels (default) touches only a text track's cues; auto/N the audio path
     from .pipeline import Job as _Job, labels_wanted as _lw, speakers_wanted as _sw
     _j = _Job(Path("/x/v.mkv"))
