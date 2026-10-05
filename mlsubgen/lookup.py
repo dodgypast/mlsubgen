@@ -128,7 +128,7 @@ def wikipedia(info: dict, targets: list[str], log: list[dict]) -> dict:
         for x in (pages[0].get("langlinks") or []) if pages else []:
             code = {"zh": "zh", "zh-yue": "yue", "nb": "no", "nn": "no", "ms": "ms", "id": "id", "tl": "tl", "fil": "tl", "my": "my", "km": "km", "lo": "lo"}.get(x["lang"], x["lang"])
             if code in targets:
-                titles[code] = x["*"]
+                titles[code] = re.sub(r"\s*\([^)]*\)\s*$", "", x["*"])      # "クレヨンしんちゃん (アニメ)" → the title alone
         out["titles"] = titles
     except Exception as e:                               # noqa: BLE001
         log.append({"source": "wikipedia", "error": str(e)[:120]})

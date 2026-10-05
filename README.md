@@ -138,14 +138,16 @@ interrupted run resumes from the work files; a skipped file remembers its verdic
 |---|---|
 | embedded subs | a text track in a target language → that target is done; any other full text track (the spoken language's first; ASS cleaned of tags, karaoke and comments; an untagged track has its language read from its own words) → the transcript, no ASR. A **bitmap** (PGS) track is read through OCR — below |
 | probe · audio | `ffprobe` picks the audio track (tag, title, default; `--audio-track N` overrides); `ffmpeg` → 16 kHz mono wav |
-| speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU — below |
+| speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU — below. **Labels** (0.5.4): when the transcript came from a text track and a target needs to know who speaks, the diarizer runs on the audio anyway (nothing is transcribed) and each cue takes the voice that covers it — a fact for the character sheet, which then says which voice is which character |
+| lookup | *opt-in, `--web-context auto`* (0.5.8): the title is identified from the file name and folders and looked up — Wikipedia first (summary, cast as "actor as character", the title in every target language), then your SearXNG, then the Brave API under a daily cap when SearXNG found too little; confirmed as a film or series, cached per title, every query recorded. The sheet gets the cast and relationships as priors, the glossary the localised title. Only the title and a search term leave the machine |
 | language ID | per ~10 s of speech, or per speaker turn: whisper's probability + Qwen's decode + the words' script and function words all have to agree; switch points refined to the exact span; a short run of another language needs strong evidence |
 | chunks · ASR | ≤ 30 s, one language each, covering the whole timeline (only the noise floor is skipped); both engines decode every chunk with its language forced; checkpointed per chunk |
-| merge | the translator LLM reconciles the two transcripts where they differ; chunks that agree need no LLM |
+| merge | the translator LLM reconciles the two transcripts where they differ; chunks that agree need no LLM. When a target is the spoken language the audio is the source even if a foreign text track exists (an English film with only Italian subtitles is transcribed, not back-translated), and that track becomes **evidence**: its lines for the disputed seconds are shown to the reconciler, never output (0.5.6) |
 | cues | sentence ends, pauses, speaker changes, length limits, hallucination filters |
 | terms | once per film, per target: the recurring names and terms (a script heuristic plus one LLM pass) rendered once — standard transliteration for names, the established form for titles — into the glossary every window reads; your `--glossary` wins |
 | characters | once per film: a chat model reads the transcript and lists who speaks — gender, age, role, who is whose parent, spouse, boss, friend, with *unknown* where the dialogue does not say — then, per target, turns that into the rules of address for that language: how each character refers to themselves, how they address each of the others (pronoun, kin term, title, politeness level, particles), and the grammatical gender of their own speech. Every window gets the sheet, so a father does not answer in the feminine, a ten-year-old does not call her father *vous*, and a Thai child stays หนู to her mother from the first scene to the last |
 | translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, characters, per-language register rules, speaker continuity, retry and per-line fallback; the **foreign-script guard** sends back any line with letters of a script that is neither the target's nor Latin (names and brands stay) |
+| repair | the **register repair** (0.5.5): a line that hedges a form with a slash (*měl/a*, *ค่ะ/ครับ*, *he/she*) is unusable on screen and detectable in any script, so only those lines go to a checker of the other model family — Qwen for a Gemma translation — with the source line and the sheet, to choose one form and change nothing else; counts in `why` |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps, cluster-safe breaks for Thai, Lao, Khmer, Burmese and Devanagari → `<video>.<lang>.srt` |
 
 **Bitmap subtitles.** Blu-ray remuxes carry their subtitles as PGS bitmaps, often a dozen languages and no text
@@ -217,6 +219,13 @@ away on any file. Other presets (`mlsubgen models` shows which are pulled): `qwe
 Every number names its material and its reference, and the command that produced it. They are enough to choose
 between alternatives on the same material, which is what they were used for; a different film can rank the
 alternatives differently, which is why the benches exist — run the same comparison on yours.
+
+**Against the film's own human tracks** (`mlsubgen refscore VIDEO --out DIR`, 0.5.7): a release that carries
+thirty text tracks is thirty references. The generated file for each language is scored against the human track,
+chrF++ per minute of film so that distributors cutting the same dialogue into different cues is not punished,
+WER for a same-language pair (English generated from English audio against the English track), and coverage.
+This is how the register work, the labels and the routes are measured from here on, across every language a
+reference exists for, rather than by one reader's sample.
 
 **Language detection** (`mlsubgen lidbench VIDEO`, scored against the film's forced subtitle track — a lower bound,
 since songs and untranslated lines are foreign speech it does not show):
