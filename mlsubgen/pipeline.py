@@ -40,7 +40,9 @@ class Job:
     window: int = config.WINDOW_CUES
     targets: list[str] = field(default_factory=lambda: ["en"])
     source: str | None = None        # --source LANG: skip the detector, every span is this language
-    speakers: str = "off"            # --speakers off | auto | N (0.4.0): diarize, split cues at speaker changes, hint the translator
+    speakers: str = "labels"         # --speakers off | labels | auto | N: labels (0.5.10 default) = voices from the audio label a text
+                                     # track's cues for the character sheet; auto / N (0.4.0) = also split cues at speaker changes
+                                     # and follow voices in detection; off = no diarization anywhere
     speaker_threshold: float | None = None
     ocr: str = "auto"                # --ocr auto | off (0.4.8): bitmap subtitle tracks read through OCR as sources / targets
     terms: str = "auto"              # --terms auto | off (0.5.1): the film's names rendered once and fed to every window
@@ -516,7 +518,9 @@ def retry_thin_chunks(engines: Engines, name: str, audio, chunks: list[Span], wo
 
 # ── stage 1d: speakers (0.4.0, opt-in) ───────────────────────────────────────────────────────────────────
 def speakers_wanted(job: Job) -> bool:
-    return (job.speakers or "off") != "off"
+    """The full speaker feature on the audio path (cues close at speaker changes, detection follows voices): auto or
+    a count. "labels" (the default since 0.5.10) and "off" leave the audio path alone; see labels_wanted."""
+    return (job.speakers or "labels") not in ("off", "labels")
 
 
 def speakers_cached(job: Job, data: dict) -> bool:
@@ -554,11 +558,13 @@ def stage_speakers(job: Job, data: dict, audio) -> list:
 
 
 def labels_wanted(job: Job, key: str, data: dict) -> bool:
-    """Speaker labels for a transcript that came from a text track (0.5.4): wanted when the character sheet is on
-    and some target is not the transcript's language — the labels are what let the sheet's rules of address apply
-    to a KNOWN speaker instead of a guessed one (2026-10-05: without them two translators made a father answer in
-    the feminine, consistently, in six languages)."""
-    if (job.register or "auto") == "off" or not key or key.startswith("asr"):
+    """Speaker labels for a transcript that came from a text track (0.5.4): wanted when the character sheet is on,
+    speakers are not "off", and some target is not the transcript's language — the labels are what let the sheet's
+    rules of address apply to a KNOWN speaker instead of a guessed one (2026-10-05: without them two translators
+    made a father answer in the feminine, consistently, in six languages). `--speakers` has three meanings since
+    0.5.10: off = no diarization anywhere; labels (default) = this, and nothing on the audio path; auto / N = this
+    and the full feature (cues close at speaker changes, detection follows voices)."""
+    if (job.register or "auto") == "off" or (job.speakers or "labels") == "off" or not key or key.startswith("asr"):
         return False
     cues = ((data.get("cues") or {}).get(key) or {}).get("cues") or []
     if len(cues) < config.CHARACTERS_MIN_CUES:
@@ -577,7 +583,7 @@ def stage_labels(job: Job, data: dict, key: str, prefetched=None) -> int:
     cues = [Cue.from_dict(d) for d in entry.get("cues", [])]
     if entry.get("labelled") == config.LABELS_VERSION:
         return sum(1 for c in cues if c.speaker)
-    spk_mode = job.speakers if (job.speakers or "off") != "off" else "auto"
+    spk_mode = job.speakers if (job.speakers or "labels") not in ("off", "labels") else "auto"
     job_spk = job.speakers
     job.speakers = spk_mode
     try:

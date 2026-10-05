@@ -106,8 +106,8 @@ def build_opts(f: dict) -> list[str]:
     subs = (f.get("subs") or "auto").strip()
     if subs != "auto":
         opts += ["--subs", subs]
-    spk = (f.get("speakers") or "off").strip().lower()
-    if spk != "off":
+    spk = (f.get("speakers") or "labels").strip().lower()
+    if spk != "labels":                                    # labels is the default; off and auto/N are passed through
         opts += ["--speakers", spk]
     batch = (f.get("batch") or "").strip()
     if batch and batch != "10":

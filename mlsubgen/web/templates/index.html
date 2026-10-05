@@ -65,9 +65,10 @@
         <option value="ignore">ignore — always transcribe the audio</option>
       </select>
       <label>Speakers</label>
-      <select name="speakers" title="speaker diarization on the CPU (pull the speaker models first): a speaker change closes a cue and the translator knows which lines share a voice — labels never appear in the subtitles. Off by default: on feature films the clustering fragments a cast.">
-        <option value="off">off (default)</option>
-        <option value="auto">auto — find the speakers</option>
+      <select name="speakers" title="speaker diarization on the CPU (pull the speaker models first). labels = when the transcript is a text track, voices from the audio label its cues so the character sheet knows who speaks; the audio path is untouched. auto / N = also on the audio path: a speaker change closes a cue, detection follows voices, the translator knows which lines share a voice — never written to the subtitles. On feature films the full feature can fragment a cast, which is why labels alone is the default. off = no diarization anywhere.">
+        <option value="labels">labels (default) — voices label a text track's cues for the character sheet</option>
+        <option value="auto">auto — find the speakers, and cut cues at speaker changes</option>
+        <option value="off">off — no diarization</option>
         <option value="2">2 speakers</option><option value="3">3 speakers</option><option value="4">4 speakers</option><option value="5">5 speakers</option><option value="6">6 speakers</option><option value="8">8 speakers</option>
       </select>
       <label>Batch</label>

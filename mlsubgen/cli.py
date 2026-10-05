@@ -92,10 +92,11 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--profile", default=None, choices=["auto", *config.PROFILES],
                    help="hardware profile: full (>= 20 GB GPU), 12gb, 8gb — translator routes, whisper precision and "
                         "whether both ASR engines may be resident (default: MLSUBGEN_PROFILE, else by the GPU's memory)")
-    p.add_argument("--speakers", default="off", metavar="off|auto|N",
-                   help="speaker diarization (0.4.0, CPU, `mlsubgen pull speakers` first): auto = find the speakers, "
-                        "N = there are N; a speaker change closes a cue and the translator is told who is talking "
-                        "(labels are hints, never written to the subtitles). Default off")
+    p.add_argument("--speakers", default="labels", metavar="off|labels|auto|N",
+                   help="speaker diarization (CPU, `mlsubgen pull speakers` first). labels (default, 0.5.10) = when the transcript is "
+                        "a text track, voices from the audio label its cues so the character sheet knows who speaks; the audio path "
+                        "is untouched. auto / N = also on the audio path: a speaker change closes a cue, detection follows voices, "
+                        "the translator is told which lines share a voice (never written to the subtitles). off = no diarization")
     p.add_argument("--speaker-threshold", type=float, default=None,
                    help=f"clustering threshold for --speakers auto (default {config.SPEAKER_THRESHOLD}; smaller = more speakers)")
     p.add_argument("--speaker-embedding", default=None, metavar="FILE",
@@ -2220,6 +2221,21 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _lk.identify(Path("/x/home video.mkv"))["confidence"] < 0.6
     assert not _lk.enabled(None) and not _lk.enabled("off") and _lk.enabled("auto"), "the lookup is opt-in"
     assert _lk.facts_text({"used": False}) == ""
+    # --speakers has three meanings (0.5.10): labels (default) touches only a text track's cues; auto/N the audio path
+    from .pipeline import Job as _Job, labels_wanted as _lw, speakers_wanted as _sw
+    _j = _Job(Path("/x/v.mkv"))
+    assert _j.speakers == "labels" and not _sw(_j), "the default leaves the audio path alone"
+    _d = {"cues": {"embedded|s:0|subrip|en": {"cues": [{"lang": "en", "ja": "x", "start": 0, "end": 1, "idx": i} for i in range(50)]}}}
+    _j.targets = ["th"]
+    assert _lw(_j, "embedded|s:0|subrip|en", _d), "labels wanted for a text track with a foreign target"
+    _j.targets = ["en"]
+    assert not _lw(_j, "embedded|s:0|subrip|en", _d), "no labels when every target is the transcript's language"
+    _j.targets = ["th"]; _j.speakers = "off"
+    assert not _lw(_j, "embedded|s:0|subrip|en", _d) and not _sw(_j), "off is off everywhere"
+    _j.speakers = "auto"
+    assert _lw(_j, "embedded|s:0|subrip|en", _d) and _sw(_j)
+    _j.speakers = "labels"; _j.register = "off"
+    assert not _lw(_j, "embedded|s:0|subrip|en", _d), "no sheet, no labels"
     # the reference scorer (0.5.7): per-minute bins, chrF++, WER, coverage — on two tiny cue sets
     from .refscore import score_pair, wer as _wer
     from .srt import SrtCue as _SrtCue

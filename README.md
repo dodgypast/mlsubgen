@@ -104,7 +104,7 @@ mlsubgen                         # every video below here → the default langua
 mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
-mlsubgen --speakers auto FOLDER  # with speaker diarization (mlsubgen pull speakers once);  --speakers 3  when you know the count
+mlsubgen --speakers auto FOLDER  # the full speaker feature on the audio path (default: labels only);  --speakers 3  when you know the count
 mlsubgen languages               # the 44 offered codes, native names, which engine decodes each, which translator each goes to
 mlsubgen config targets th,de    # save the default languages;  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
@@ -159,13 +159,16 @@ script, mostly symbols, repeated, full of replacement characters or digit-and-sy
 left alone and the audio transcribed. Results are cached, so a track is OCR'd once; `mlsubgen ocr VIDEO --track N`
 runs it by hand. Measured results are in *How good is it*.
 
-**Speakers.** `--speakers auto` (or `N` when you know the cast size) runs pyannote's `segmentation-3.0` and a
-3D-Speaker embedding through sherpa-onnx on the CPU (33 MB, pulled from sherpa's GitHub releases — no Hugging Face
-token) before anything listens to the words. The turns cut the language-detection windows at speaker changes, so a
-character who switches language mid-scene is followed and a bilingual voice is learnt as bilingual; after ASR they
-close cues and give the translator an anonymous tag per line (`[S2]`: "same voice / different voice", nothing
-about who). A file whose diarization gives no usable structure — one voice, or a cast fragmented into dozens — is
-processed as without the option. Off by default: on feature films the clustering tends to fragment a cast.
+**Speakers.** `--speakers` has three settings. **`labels`**, the default: when the transcript is a text track, the
+diarizer runs on the audio anyway and each cue takes the voice that covers it, so the character sheet can say
+which voice is which character and the translator knows who speaks; the audio path is untouched. **`auto`** (or
+`N` when you know the cast size): the full feature — pyannote's `segmentation-3.0` and a 3D-Speaker embedding
+through sherpa-onnx on the CPU (33 MB, pulled from sherpa's GitHub releases, no Hugging Face token) run before
+anything listens to the words; the turns cut the language-detection windows at speaker changes, so a character who
+switches language mid-scene is followed and a bilingual voice is learnt as bilingual; after ASR they close cues and
+give the translator a tag per line. On feature films the clustering tends to fragment a cast, which is why the
+audio path's version is not the default. **`off`**: no diarization anywhere. A file whose diarization gives no
+usable structure — one voice, or dozens — is processed as without the option. Tags never reach the subtitles.
 
 ## Languages and translators
 
