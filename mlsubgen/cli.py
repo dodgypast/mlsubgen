@@ -2413,6 +2413,22 @@ def cmd_selftest(a: argparse.Namespace) -> int:
 
 
 # ── main ─────────────────────────────────────────────────────────────────────────────────────────────────
+def check_home_writable() -> None:
+    """mlsubgen's own folders must be writable before anything runs (0.5.17). The 2026-10-05 fresh-clone verification
+    ran the container with a wrong PUID and got a PermissionError traceback at the first write of skipped.log — the
+    first thing a self-hoster with a mistyped .env would have seen. Now it is one sentence naming the likely cause."""
+    for d in (config.MLSUBGEN_HOME, config.WORK_DIR, config.LOG_DIR, config.TMP_DIR):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe_file = d / ".write-test"
+            probe_file.write_text("ok")
+            probe_file.unlink()
+        except OSError as e:
+            raise SystemExit(f"mlsubgen's own folder is not writable: {d} ({e.strerror or e}). In Docker this is PUID/PGID in .env "
+                             f"not matching the owner of ./data (and ./models); on a host, the folder's permissions or a read-only mount. "
+                             f"Nothing has been started.")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mlsubgen", description="subtitles for videos, entirely on your own machine — "
                                  "`mlsubgen help` for the guide, `mlsubgen help COMMAND` for a command's options",
@@ -2598,6 +2614,8 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(args)
     a.argv = args                                   # `enqueue` stores the run arguments as given
     try:
+        if getattr(a, "cmd", "") in ("run", "worker", "bench", "lidbench", "ocrbench", "ocr", "pull", "scan"):
+            check_home_writable()                     # 0.5.17: one sentence instead of a traceback at the first write
         return a.fn(a)
     except KeyboardInterrupt:
         # Ctrl-C, `mlsubgen cancel/pause`, a worker stop or a reboot all arrive as SIGINT: a clean interruption, not

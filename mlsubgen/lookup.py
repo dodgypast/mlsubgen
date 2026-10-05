@@ -42,7 +42,8 @@ UA = {"User-Agent": "mlsubgen/0.5 (https://github.com/dodgypast/mlsubgen; local 
 
 
 def _home() -> Path:
-    return Path(getattr(config, "HOME", None) or os.environ.get("MLSUBGEN_HOME") or (Path.home() / "mlsubgen"))
+    """mlsubgen's own state folder (config.MLSUBGEN_HOME; config.HOME is the user's home — the 0.5.8 cache went there)."""
+    return Path(getattr(config, "MLSUBGEN_HOME", None) or os.environ.get("MLSUBGEN_HOME") or (Path.home() / "mlsubgen"))
 
 
 def enabled(job_setting: str | None) -> bool:
