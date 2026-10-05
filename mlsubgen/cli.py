@@ -510,6 +510,11 @@ def cmd_run(a: argparse.Namespace) -> int:
                     record_skip(job.video, rem["reason"])
                     continue
                 data.pop("skipped", None)                 # a retry: the old verdict must not survive a later save
+                # nothing can be written beside the video: say so now, before the card is used (0.5.14 — a read-only
+                # folder, a wrong PUID/PGID in Docker, a share mounted read-only all look the same from here)
+                if not os.access(job.video.parent, os.W_OK):
+                    skip(job, "the folder is not writable (permissions, PUID/PGID, or a read-only mount) — the .srt could not be written beside the video", remember=False)
+                    continue
                 try:
                     try:
                         done_targets, key = stage_subs(job, data, a.subs, job.targets)
@@ -641,7 +646,12 @@ def cmd_run(a: argparse.Namespace) -> int:
                 if done is None:
                     continue
                 out = srt_path_for(job.video, target)
-                n = emit(done, out, target)
+                try:
+                    n = emit(done, out, target)
+                except OSError as e:                      # a name too long for the filesystem, a folder gone read-only mid-run
+                    _log(f"[srt] ⚠ {out.name}: could not be written ({e.strerror or e}) — the translation stays in the work file")
+                    skipped.append(f"{job.video.name} ({target}: {e.strerror or e})"); record_skip(job.video, f"{target}: {e.strerror or e}")
+                    continue
                 wrote += 1
                 _log(f"[srt] {out.name}: {n} cues")
             if wrote:
