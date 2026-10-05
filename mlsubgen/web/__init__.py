@@ -109,6 +109,11 @@ def build_opts(f: dict) -> list[str]:
     spk = (f.get("speakers") or "labels").strip().lower()
     if spk != "labels":                                    # labels is the default; off and auto/N are passed through
         opts += ["--speakers", spk]
+    wc = (f.get("web_context") or "").strip().lower()      # the title lookup (0.5.8): opt-in, so only "auto" is passed
+    if wc == "auto":
+        opts += ["--web-context", "auto"]
+    elif wc == "off" and os.environ.get("MLSUBGEN_WEB_CONTEXT", "").lower() == "auto":
+        opts += ["--web-context", "off"]                   # the environment turned it on; this job turns it off
     batch = (f.get("batch") or "").strip()
     if batch and batch != "10":
         opts += ["--batch", str(int(batch))]
@@ -381,6 +386,7 @@ def create_app() -> FastAPI:
         return render(request, "index.html", translators=list(TRANSLATORS), default_targets=defaults, langs=langs,
                       last_folder=last_folder(), profiles=profiles, active_profile=config.PROFILE,
                       vram_gb=round(config.VRAM_GB or 0, 1),
+                      web_context_default=os.environ.get("MLSUBGEN_WEB_CONTEXT", "off").lower(),
                       routes=[(f"{a}→{b}", m) for (a, b), m in config.TRANSLATE_ROUTES.items()],
                       sources=sorted(config.LANG_NAMES.items(), key=lambda kv: kv[1]),
                       default_genre="a documentary / interview programme")

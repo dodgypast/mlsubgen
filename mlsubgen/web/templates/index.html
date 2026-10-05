@@ -73,6 +73,11 @@
       </select>
       <label>Batch</label>
       <div class="inline-ctl"><input name="batch" value="10" size="4" title="files per transcribe-then-translate round — the card swaps from the speech engines to the translator once per round; 0 = transcribe everything first"> <span class="muted">files per round</span></div>
+      <label>Title lookup</label>
+      <select name="web_context" title="OPT-IN. Looks the title up — Wikipedia first, then your SearXNG (MLSUBGEN_SEARXNG_URL) and the Brave API (BRAVE_API_KEY) under a daily cap — and gives the character sheet the cast and relationships as priors, the glossary the localised title. Only the title and a search term leave the machine; every query is recorded and shown by why. Off by default: with it off nothing is sent anywhere.">
+        <option value="off"{% if web_context_default != 'auto' %} selected{% endif %}>off (default) — nothing leaves the machine</option>
+        <option value="auto"{% if web_context_default == 'auto' %} selected{% endif %}>auto — look the title up for the character sheet and the glossary</option>
+      </select>
     </div>
 
     <h3 class="group">Hints <span class="muted">— optional, they only make the result better</span></h3>
