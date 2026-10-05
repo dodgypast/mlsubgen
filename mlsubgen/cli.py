@@ -165,9 +165,9 @@ def parse_targets(text: str | None, warn: bool = True, allow_withheld: bool = Fa
 
 
 def check_speakers(a: argparse.Namespace) -> None:
-    v = str(getattr(a, "speakers", "off") or "off").lower()
-    if v not in ("off", "auto") and not v.isdigit():
-        raise SystemExit("--speakers takes off, auto or a number of speakers (e.g. --speakers 3)")
+    v = str(getattr(a, "speakers", "labels") or "labels").lower()
+    if v not in ("off", "labels", "auto") and not v.isdigit():
+        raise SystemExit("--speakers takes off, labels, auto or a number of speakers (e.g. --speakers 3)")
     a.speakers = v
     if getattr(a, "speaker_embedding", None):
         config.set_speaker_embedding(a.speaker_embedding)
@@ -2238,6 +2238,13 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert _lw(_j, "embedded|s:0|subrip|en", _d) and _sw(_j)
     _j.speakers = "labels"; _j.register = "off"
     assert not _lw(_j, "embedded|s:0|subrip|en", _d), "no sheet, no labels"
+    # the command line accepts every meaning (the 2026-10-05 burn-in found the default itself rejected)
+    for v in ("off", "labels", "auto", "3"):
+        _ns = argparse.Namespace(speakers=v); check_speakers(_ns); assert _ns.speakers == v
+    try:
+        check_speakers(argparse.Namespace(speakers="many")); raise AssertionError("an unknown value must be refused")
+    except SystemExit:
+        pass
     # the reference scorer (0.5.7): per-minute bins, chrF++, WER, coverage — on two tiny cue sets
     from .refscore import score_pair, wer as _wer
     from .srt import SrtCue as _SrtCue
