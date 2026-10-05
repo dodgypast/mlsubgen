@@ -8,7 +8,9 @@ mlsubgen
 Every video in the folder and below it gets one `.srt` per subtitle language you asked for (`<video>.en.srt`,
 `<video>.th.srt` …). Your media and its subtitle text never leave the machine: the speech is transcribed by local
 models and translated by a local LLM. The only files written beside your videos are the `.srt` files; mlsubgen's
-own state lives under its own directory, and the only network traffic is the one-time download of the models.
+own state lives under its own directory, and the only network traffic is the one-time download of the models —
+unless you turn on the optional title lookup (`--web-context auto`), which sends the film's title and a search
+term to Wikipedia and, where you configure them, your own SearXNG and the Brave API, and nothing else.
 
 **mlsubgen** = *multi-language* + *machine-learning* subtitle generator. It began as a Japanese→English tool for
 one collection and grew into a general one. Linux and NVIDIA only. Apache-2.0. Written with the help of Claude
@@ -80,7 +82,7 @@ forces one; `mlsubgen pull` downloads what the active profile needs).
 | **cards, for example** | RTX 3090 / 4090 / 5090, A5000 / A6000, L4 | RTX 4080, 4070 Ti Super, 4060 Ti 16 GB, 5070 Ti, A4000 | RTX 3060 12 GB, 4070, 3080 12 GB, 5070 | RTX 3050 / 3070 / 4060 (8 GB), 2070 / 2080 |
 | **system RAM** | 16 GB | 16 GB | 24 GB (else `12gb-dense`) | 32 GB (else `8gb-dense`) |
 | **speech recognition** | both engines resident, whisper float16 (≈ 10 GB) | the same | both resident, whisper int8 (≈ 8 GB) | one engine on the card at a time; the same two engines, slower per file |
-| **translation** | the routes below: `gemma4:31b` by default, `qwen3.8:27b` for Japanese → English, `translategemma:27b` for six languages; all fully on the card (the test clip: 103 s) | `gemma4:26b`, 22 of 30 layers on the card (≈ 13 GB): the clip in 68 s, measured | `gemma4:26b`, 14 layers (≈ 9 GB): ~50 tok/s, the clip in roughly 100 s | `gemma4:26b`, 6 layers (≈ 5 GB): ~40 tok/s, the clip in roughly 2 min |
+| **translation** | `gemma4:31b` by default, `qwen3.8:27b` for Japanese → English, `translategemma:27b` for six languages (see *Languages*); all fully on the card (the test clip: 103 s) | `gemma4:26b`, 22 of 30 layers on the card (≈ 13 GB): the clip in 68 s, measured; `translategemma:12b` whole for eight languages | `gemma4:26b`, 14 layers (≈ 9 GB): ~50 tok/s, the clip in roughly 100 s; `translategemma:12b` for eight languages | `gemma4:26b`, 6 layers (≈ 5 GB): ~40 tok/s, the clip in roughly 2 min; `translategemma:4b` for seven languages |
 | **`-dense` fallback** (RAM short) | — | — | `gemma4:12b` (7.2 GB): chrF++ 29.0 | `gemma4:e4b` (6.1 GB): weaker again |
 | **bitmap subtitles, Thai / CJK / stacked scripts** (vision model) | the 31B | the 26B — matched the 31B on the Thai benchmark | the 26B (`12gb-dense`: the 12B, weaker) | the 26B, slower (`8gb-dense`: **no** — the E4B cannot read them; those tracks are left alone and the audio transcribed) |
 | everything else — per-stretch detection, embedded text tracks, tesseract OCR, diarization, terms, characters, benches | yes | yes | yes | yes |
@@ -170,22 +172,25 @@ its aligner covers — Japanese, Chinese, Cantonese, Korean, English, French, Ge
 Spanish — and whisper the rest), and **44 are offered as targets**. Which translator a target goes to is a
 measured choice per language, and `mlsubgen languages` shows it for the active profile:
 
-| route | translator | languages |
-|---|---|---|
-| default | `gemma4:31b-it-qat` (19 GB), with the character sheet and the per-language register rules | every target not listed below |
-| Japanese → English | `qwen3.8:27b` (18 GB) | English from Japanese audio or tracks |
-| invented-word languages | `translategemma:27b` (17 GB) — Google's translation-only Gemma | Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish |
-| withheld | — | Greek |
+| profile | default translator | Japanese → English | the invented-word languages go to | withheld |
+|---|---|---|---|---|
+| `full` | `gemma4:31b-it-qat` (19 GB), with the character sheet and the per-language register rules | `qwen3.8:27b` (18 GB) | `translategemma:27b` (17 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish | Greek |
+| `16gb`, `12gb` | `gemma4:26b` (18 GB, MoE, part on the card) | the 26B | `translategemma:12b` (8.1 GB, whole on the card): the six above plus Slovak and Slovenian | Greek |
+| `8gb` | `gemma4:26b` (6 layers on the card) | the 26B | `translategemma:4b` (3.3 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish, Slovak | Greek |
+| `12gb-dense`, `8gb-dense` | `gemma4:12b` / `gemma4:e4b` | the same | the same 12B / 4B routes (unmeasured on these) | Greek |
 
-The routes come from one film in 44 languages, the 31B against TranslateGemma, scored on 2026-10-04 by
-dictionary-unknown words, script purity and reading. TranslateGemma's unknown-word rate on the six routed
-languages is a quarter to a tenth of the 31B's (Latvian 5.6 % → 0.7 %, Hungarian 3.5 → 0.4, Lithuanian 4.3 →
-0.6, Estonian 3.0 → 0.5, Catalan 2.6 → 1.0). It is not the default for the rest because it has faults of its own:
-it defaults to formal address (a child saying *vous* to her father), hedges gender with slashes where the speaker
-is unknown, and its fixed prompt cannot take the character sheet — **so the six routed languages get its words
-without the sheet's rules of address.** A narrow repair pass that touches only the lines a validator flags is the
-designed next step and is not built. Greek is withheld because the choice there is between the 31B's grammar
-errors and TranslateGemma's gender slashes; it returns when the character sheet is measured on it.
+The routes come from one film in 44 languages and five translators, scored on 2026-10-04 and 05 by
+dictionary-unknown words, script purity and reading. On the routed languages the TranslateGemmas' unknown-word
+rates are a quarter to a tenth of the Gemma 4s' (Latvian: 31B 5.6 %, 26B 4.8, TranslateGemma 27B 0.7, 12B 1.7,
+4B 3.4; Hungarian 3.5 / 2.1 / 0.4 / 0.8 / 1.1), the 12B keeps nearly all of the 27B's advantage, and the 4B keeps
+it for Hungarian, Catalan and Slovak. TranslateGemma is not the default for the rest because it has faults of its
+own: it defaults to formal address (a child saying *vous* to her father), hedges gender with slashes where the
+speaker is unknown (the 12B hedges every Thai line with *ค่ะ/ครับ*, so no TranslateGemma ever sees Thai), and its
+fixed prompt cannot take the character sheet — **so the routed languages get its words without the sheet's rules
+of address.** A narrow repair pass that touches only the lines a validator flags is the next step. The 27B on a
+16 GB split took 37 minutes a language, which is why the small profiles get the 12B whole rather than the 27B
+in part. Greek is withheld everywhere because the choice there is between the Gemmas' grammar errors and
+TranslateGemma's gender slashes; it returns when the repair pass is measured on it.
 
 How the 44 read, from one episode translated into all of them on 2026-10-03 and the same scene read in each by a
 competent reader rather than a native speaker (English is a target but not in the tiers: it was the source):
@@ -282,6 +287,8 @@ not. *What stays local?* Everything except the one-time model downloads; `HF_HUB
 | `MLSUBGEN_WEB_HOST` / `MLSUBGEN_WEB_PORT` | `0.0.0.0` / `8790` | the web UI |
 | `MLSUBGEN_WEB_AUTH` | *(none)* | `user:password` — HTTP Basic on every page and API route |
 | `MLSUBGEN_METRICS_FILE` | *(none)* | a `.prom` file in node_exporter's textfile directory |
+| `MLSUBGEN_WEB_CONTEXT` | `off` | `auto` turns the title lookup on (opt-in; `--web-context` per run); the character sheet gets the cast, relationships and localised titles as priors, with sources recorded |
+| `MLSUBGEN_SEARXNG_URL` / `BRAVE_API_KEY` / `MLSUBGEN_BRAVE_DAILY_CAP` | *(none)* / *(none)* / `100` | the lookup's second and third sources after Wikipedia; Brave only when SearXNG found too little, under the daily cap |
 | `MLSUBGEN_PROFILE` | `auto` | `full`, `16gb`, `12gb`, `8gb`, `12gb-dense` or `8gb-dense` |
 | `HF_HUB_OFFLINE` | `0` | `1` after the models are downloaded |
 

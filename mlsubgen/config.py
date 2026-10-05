@@ -150,6 +150,12 @@ TRANSLATE_ROUTES: dict[tuple[str, str], str] = {}
 # So cards from 8 GB up can run the 26B — IF the machine has the system RAM for the rest of the model (the
 # remainder is read from RAM every token). The profiles below take the 26B where the card AND the RAM allow it,
 # and fall back to the dense small models otherwise. OLLAMA_NUM_GPU is the layer split, passed on every request.
+_SMALL_TG12 = {("*", "hu"): "translategemma-12b", ("*", "lt"): "translategemma-12b", ("*", "lv"): "translategemma-12b",
+               ("*", "et"): "translategemma-12b", ("*", "ca"): "translategemma-12b", ("*", "fi"): "translategemma-12b",
+               ("*", "sk"): "translategemma-12b", ("*", "sl"): "translategemma-12b"}
+_SMALL_TG4 = {("*", "hu"): "translategemma-4b", ("*", "lt"): "translategemma-4b", ("*", "lv"): "translategemma-4b",
+              ("*", "et"): "translategemma-4b", ("*", "ca"): "translategemma-4b", ("*", "fi"): "translategemma-4b",
+              ("*", "sk"): "translategemma-4b"}
 PROFILES = {
     # Per-language routes on the full profile (2026-10-04, one film in 44 languages, two translators): TranslateGemma
     # 27B where the 31B invents words (Hungarian 3.5 % of words unknown to the dictionary → 0.4, Lithuanian 4.3 →
@@ -162,19 +168,27 @@ PROFILES = {
                          ("*", "lv"): "translategemma", ("*", "et"): "translategemma", ("*", "ca"): "translategemma",
                          ("*", "fi"): "translategemma", ("*", "*"): "gemma4"},
                  default="qwen3.8", whisper_compute="float16", asr_sequential=False, vlm="gemma4:31b-it-qat", num_gpu=None, min_ram_gb=16),
-    "16gb": dict(min_vram_gb=15.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+    # The small profiles' routes (2026-10-05, one film in 44 languages, five translators, dictionary-unknown words):
+    # the 26B is the 31B's equal and the default; TranslateGemma 12B keeps the 27B's advantage on the languages where
+    # the Gemmas invent words (Hungarian 0.8 % vs the 26B's 2.1, Lithuanian 0.7 vs 4.8, Latvian 1.7 vs 4.8, Estonian
+    # 1.1 vs 3.6, Catalan 0.9 vs 2.3, Slovak 0.6 vs 2.1, Slovenian 1.5 vs 3.1) and fits a 12 GB card whole; the 4B
+    # keeps it for Hungarian, Catalan and Slovak and still beats the 26B on the Baltic three (2.9 / 3.4 / 2.3 vs 4.8
+    # / 4.8 / 3.6). TranslateGemma 27B on a 16 GB split took 37 min a language and is no route. No TranslateGemma of
+    # any size sees Thai (the 12B hedges every line with ค่ะ/ครับ) or any other register language.
+    "16gb": dict(min_vram_gb=15.0, routes={**_SMALL_TG12, ("*", "*"): "gemma4-26b"}, default="gemma4-26b",
                  whisper_compute="float16", asr_sequential=False, vlm="gemma4:26b", num_gpu=22, min_ram_gb=16,
                  fallback="12gb-dense"),
-    "12gb": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+    "12gb": dict(min_vram_gb=11.0, routes={**_SMALL_TG12, ("*", "*"): "gemma4-26b"}, default="gemma4-26b",
                  whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:26b", num_gpu=14, min_ram_gb=24,
                  fallback="12gb-dense"),
-    "8gb": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-26b"}, default="gemma4-26b",
+    "8gb": dict(min_vram_gb=0.0, routes={**_SMALL_TG4, ("*", "*"): "gemma4-26b"}, default="gemma4-26b",
                 whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:26b", num_gpu=6, min_ram_gb=32,
                 fallback="8gb-dense"),
-    # the dense small models, for machines without the RAM for the 26B's remainder
-    "12gb-dense": dict(min_vram_gb=11.0, routes={("*", "*"): "gemma4-12b"}, default="gemma4-12b",
+    # the dense small models, for machines without the RAM for the 26B's remainder — weaker still and unmeasured on
+    # the routed languages, so they take the same routes
+    "12gb-dense": dict(min_vram_gb=11.0, routes={**_SMALL_TG12, ("*", "*"): "gemma4-12b"}, default="gemma4-12b",
                        whisper_compute="int8_float16", asr_sequential=False, vlm="gemma4:12b-it-qat", num_gpu=None, min_ram_gb=0),
-    "8gb-dense": dict(min_vram_gb=0.0, routes={("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
+    "8gb-dense": dict(min_vram_gb=0.0, routes={**_SMALL_TG4, ("*", "*"): "gemma4-e4b"}, default="gemma4-e4b",
                       whisper_compute="int8_float16", asr_sequential=True, vlm="gemma4:e4b-it-qat", num_gpu=None, min_ram_gb=0),
 }
 OLLAMA_NUM_GPU: int | None = None   # layers of the translator / vision model kept on the card; None = all (set by the profile)
@@ -377,7 +391,8 @@ TERMS_MAX = 60                 # the most frequent terms are kept; the glossary 
 TERMS_CHUNK_CHARS = 6000       # transcript text per extraction call (up to four calls, spread over a long film)
 
 # ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
-CHARACTERS_VERSION = 1         # part of the cache: bump when the prompts change
+CHARACTERS_VERSION = 2         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown)
+LABELS_VERSION = 1             # speaker labels on a text track's cues (0.5.4): bump when the labelling changes
 CHARACTERS_MIN_CUES = 40       # a clip shorter than this has no recurring characters worth a sheet
 CHARACTERS_CHARS = 14000       # transcript text the sheet call reads (sampled evenly beyond that)
 
