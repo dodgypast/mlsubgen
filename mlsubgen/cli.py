@@ -112,6 +112,10 @@ def add_common(p: argparse.ArgumentParser) -> None:
                    help="the character sheet (0.5.1): auto = who speaks, their gender and how they address each other is worked out "
                         "once per film and given to every window in the target's terms (pronouns, kin terms, politeness, grammatical "
                         "gender); off = each window guesses")
+    p.add_argument("--web-context", default=None, choices=["auto", "off"], dest="web_context",
+                   help="OPT-IN (0.5.8): auto = look the title up (Wikipedia, then SearXNG at MLSUBGEN_SEARXNG_URL, then the Brave API "
+                        "with BRAVE_API_KEY) and give the character sheet the cast, relationships and localised titles as priors; "
+                        "only the title and search terms leave the machine. Default off (MLSUBGEN_WEB_CONTEXT)")
     p.add_argument("--asr", default=config.ASR_ENGINE, choices=["dual", "auto", "qwen", "whisper"],
                    help="ASR engine: dual = both engines decode every chunk and the LLM reconciles them (default); "
                         "auto = one engine per chunk by its language (Qwen where its aligner covers the language, "
@@ -309,9 +313,9 @@ class Prefetch:
 def cmd_run(a: argparse.Namespace) -> int:
     from .asr import Engines, words_from_dicts
     from .audio import extract_wav, load_wav
-    from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, missing_targets, speakers_cached,
-                           speakers_wanted, srt_path_for, stage_asr, stage_audio, stage_cues, stage_lid, stage_merge,
-                           stage_speakers, stage_subs, stage_translate, usable_turns)
+    from .pipeline import (Job, NotSupported, asr_key_for, check_source, cue_key_for, emit, labels_wanted, missing_targets,
+                           speakers_cached, speakers_wanted, srt_path_for, stage_asr, stage_audio, stage_cues, stage_labels,
+                           stage_lid, stage_merge, stage_speakers, stage_subs, stage_translate, usable_turns)
     from .probe import probe
     from .segment import Cue
     from .subs import code_for_tag, pick, plan_sources
@@ -389,7 +393,7 @@ def cmd_run(a: argparse.Namespace) -> int:
 
     jobs_ = [Job(v, None, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
                  a.window, want, source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, ocr=a.ocr, terms=a.terms,
-                 register=a.register) for v, want in todo]
+                 register=a.register, web_context=a.web_context) for v, want in todo]
     engines = Engines(a.asr_model, a.whisper_model)
     pool = ClientPool(a.url, a.backend, presets)
 
@@ -516,6 +520,18 @@ def cmd_run(a: argparse.Namespace) -> int:
                                 continue
                         if key:
                             keys[job.video] = key                 # cues are in the work file; stage 2 translates them
+                            # speaker labels from the audio for a text track's cues (0.5.4): the diarizer alone, no
+                            # transcription — so the character sheet applies to a known speaker, not a guessed one
+                            if labels_wanted(job, key, data):
+                                try:
+                                    entry = prefetch.pop(job.video, None)
+                                    stage_labels(job, data, key, prefetched=entry.get() if entry is not None else None)
+                                except SystemExit as e:
+                                    _log(f"[labels] ⚠ {e} — the cues stay untagged")
+                                except Exception as e:                    # noqa: BLE001
+                                    _log(f"[labels] ⚠ {type(e).__name__}: {e} — the cues stay untagged")
+                                finally:
+                                    cleanup(job, work_file=False)         # the wav
                             continue
                         pre = None
                         entry = prefetch.pop(job.video, None)
@@ -889,7 +905,7 @@ def cmd_bench(a: argparse.Namespace) -> int:
     source = a.source or ("ja" if a.assume_ja else None)
     job = Job(video, clip, a.audio_track, Path(a.work_dir).expanduser(), config.TMP_DIR, context, glossary, a.genre,
               a.window, [target], source, speakers=a.speakers, speaker_threshold=a.speaker_threshold, terms=a.terms,
-              register=a.register)
+              register=a.register, web_context=a.web_context)
     data = work.load(job.work_file)
     engines = Engines(a.asr_model, a.whisper_model)
     key = asr_key_for(engines, context, a.asr)
@@ -1515,6 +1531,21 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refscore(a: argparse.Namespace) -> int:
+    """`mlsubgen refscore VIDEO --out DIR` — the generated files in DIR against the film's own human text tracks
+    (0.5.7): chrF++ per minute of film, WER for a same-language pair, coverage. See refscore.py."""
+    from . import refscore as rsc
+    video, out = Path(a.video).expanduser(), Path(a.out).expanduser()
+    langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
+    rows = rsc.refscore(video, out, langs, a.bin)
+    if not rows:
+        _log("nothing to score: no language has both a text track in the file and a generated .srt in --out"); return 1
+    rsc.print_table(rows, f"{video.name} — generated files in {out} against the film's own tracks (bins of {a.bin:.0f}s)")
+    if a.json:
+        Path(a.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return 0
+
+
 def cmd_why(a: argparse.Namespace) -> int:
     """`mlsubgen why VIDEO` — why each subtitle file of this video says what it says (0.5.0.6): where the transcript
     came from, what detected the languages, whether speakers and terms were used, which model translated. Read
@@ -1542,7 +1573,9 @@ def cmd_why(a: argparse.Namespace) -> int:
         for key, e in asr.items():
             ms = e.get("merge_stats") or {}
             print(f"  transcript: ASR ({e.get('engines')}, {e.get('mode', 'single')} mode, {e.get('elapsed')}s)"
-                  + (f"; merge: agreed {ms.get('agree', 0)}, reconciled by the LLM {ms.get('llm', 0)}, one engine {ms.get('qwen', 0) + ms.get('whisper', 0)}"
+                  + (f"; merge: agreed {ms.get('agree', 0)}, reconciled by the LLM {ms.get('llm', 0)}"
+                     + (f" ({ms['with_evidence']} with the evidence track)" if ms.get("with_evidence") else "")
+                     + f", one engine {ms.get('qwen', 0) + ms.get('whisper', 0)}"
                      + (f" ({e.get('merge_model')})" if e.get("merge_model") else "") if ms else (" — merge pending" if e.get("merge") == "pending" else "")))
     lid_d = data.get("lid")
     if lid_d:
@@ -1559,8 +1592,30 @@ def cmd_why(a: argparse.Namespace) -> int:
     for k, g in gate.items():
         if k != f"s:{src.get('ocr_track')}":
             print(f"  OCR {k} ({config.LANG_NAMES.get(g.get('language'), g.get('language'))}): {'used' if g.get('usable') else 'rejected'} — {g.get('why')}")
+    mc = data.get("media_context")
+    if mc:
+        idn = mc.get("identity") or {}
+        wp = mc.get("wikipedia") or {}
+        print(f"  lookup: {idn.get('title') or idn.get('series')}" + (f" ({idn['year']})" if idn.get("year") else "")
+              + (f" S{idn['season']:02d}E{idn['episode']:02d}" if idn.get("season") and idn.get("episode") else f" ep {idn['episode']}" if idn.get("episode") else "")
+              + (f" — used: {wp.get('page')} ({len(wp.get('cast', []))} cast lines, {len(mc.get('results', []))} search results; "
+                 f"queries: {', '.join(sorted({q.get('source') for q in mc.get('queries', [])}))})" if mc.get("used") else f" — not used: {mc.get('why')}")
+              + (" [cached]" if mc.get("cached") else ""))
+    ev = data.get("evidence_track")
+    if ev:
+        print(f"  evidence: {config.LANG_NAMES.get(ev.get('language'), ev.get('language'))} track s:{ev.get('track')} kept as evidence, not as the source — {ev.get('why')}")
+    for ck, cs in (data.get("cues") or {}).items():
+        if cs.get("labelled"):
+            print(f"  labels: {cs.get('stats', {}).get('labelled_cues', 0)} of {len(cs.get('cues', []))} cues carry a voice tag from the audio (text-track source)")
     for key, t in (data.get("terms") or {}).items():
         print(f"  terms: {len(t.get('terms', []))} recurring term(s), rendered for {', '.join(t.get('renderings', {}).keys()) or 'nothing yet'} ({t.get('model')})")
+    for key, c in (data.get("characters") or {}).items():
+        sheet = c.get("sheet") or []
+        print(f"  characters: " + ("; ".join(f"{x['name']} ({x.get('gender', '?')}, {x.get('age', '?')}"
+                                              + (", " + ", ".join(f"{r.get('relation')} of {r.get('to')}" for r in x.get("relations", [])[:2]) if x.get("relations") else "")
+                                              + (f"; evidence: {x['evidence'][0]!r}" if x.get("evidence") else "") + ")" for x in sheet) or "none")
+              + (f" — voices: " + ", ".join(f"{k}={v}" for k, v in sorted((c.get("voices") or {}).items())) if c.get("voices") else "")
+              + f" — rules rendered for {', '.join(k for k, v in (c.get('renderings') or {}).items() if v) or 'nothing yet'} ({c.get('model')})")
     for t, o in (data.get("ocr_targets") or {}).items():
         out = srt_path_for(video, t)
         print(f"  {config.LANG_NAMES.get(t, t)}: the real subtitles — bitmap track s:{o.get('track')}{', ' + o['title'] if o.get('title') else ''} read by "
@@ -1576,7 +1631,10 @@ def cmd_why(a: argparse.Namespace) -> int:
             state = ("written " + time.strftime("%Y-%m-%d %H:%M", time.localtime(out.stat().st_mtime))) if out.is_file() else "no .srt beside the video"
         print(f"  {config.LANG_NAMES.get(target, target)}: {len(t.get('cues', []))} cues, translated by {', '.join(t.get('models', []))} in {t.get('elapsed')}s"
               + (f", {copied} copied through" if copied else "") + (" — PARTIAL (interrupted)" if t.get("partial") else "")
-              + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if tkey.endswith("|terms") else "")
+              + (" — with speaker labels" if "spk:" in tkey else "") + (" — with the terminology pass" if "|terms" in tkey else "")
+              + (" — with the character sheet" if tkey.endswith("|chars") else "")
+              + (f" — {t['repairs']} hedged line(s) repaired by the checker" if t.get("repairs") else "")
+              + (f" — {t['hedged']} still hedged" if t.get("hedged") else "")
               + f"; {state}")
     if not data.get("translations"):
         print("  translations: none recorded" + (f"; cue sets: {len(cue_sets)}" if cue_sets else ""))
@@ -1914,9 +1972,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert set(config.PROFILE_WITHHELD) == set(config.PROFILES), "every profile has a withheld set"
     assert config.targets_for_profile("8gb").keys() == config.targets_for_profile("full").keys(), "inherited until measured"
     _prev = config.PROFILE
+    from .translate import route as _route
     config.apply_profile("8gb")
     assert "el" not in config.TARGET_LANGS and len(config.TARGET_LANGS) == 44
     assert "translategemma-12b" in config.TRANSLATORS and config.TRANSLATORS["translategemma-4b"].prompt_style == "translategemma"
+    # the small profiles' routes (2026-10-05): the 12B where the 26B invents words, the 4B on 8 GB, never for Thai
+    assert _route("en", "hu") == "translategemma-4b" and _route("en", "sl") == "gemma4-26b" and _route("en", "th") == "gemma4-26b"
+    config.apply_profile("12gb")
+    assert _route("en", "hu") == "translategemma-12b" and _route("en", "sl") == "translategemma-12b" and _route("en", "th") == "gemma4-26b"
+    assert _route("ja", "en") == "gemma4-26b"
     config.apply_profile("full")
     from .translate import foreign_script, route as _route
     assert _route("en", "hu") == "translategemma" and _route("en", "lv") == "translategemma" and _route("en", "fr") == "gemma4" and _route("ja", "en") == "qwen3.8"
@@ -2141,6 +2205,64 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
     he = _tm.heuristic_candidates(en_lines, "en")
     assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he
+    # media identification from file names (0.5.8): no network in the selftest, only the parse and the opt-in default
+    from . import lookup as _lk
+    _i = _lk.identify(Path("/x/Definitely.Maybe.2008.1080p.BluRay.x264-EbP.mkv"))
+    assert _i["title"] == "Definitely Maybe" and _i["year"] == 2008 and _i["kind"] == "film" and _i["confidence"] >= 0.6, _i
+    _i = _lk.identify(Path("/x/Shin Chan/Season 2/[BuriBuri] Crayon Shin-chan - 0064 [720p][51E88FB6].mkv"))
+    assert _i["series"] == "Crayon Shin-chan" and _i["episode"] == 64 and _i.get("season_folder") == 2, _i
+    _i = _lk.identify(Path("/x/Blue.Planet.II.S01E02.The.Deep.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb.mkv"))
+    assert _i["series"] == "Blue Planet II" and _i["season"] == 1 and _i["episode"] == 2, _i
+    _i = _lk.identify(Path("/x/Kindergarten Cop 1990 1080p UHD BluRay DDP7.1 Atmos DV HDR x265-HiDt.mkv"))
+    assert _i["title"] == "Kindergarten Cop" and _i["year"] == 1990, _i
+    _i = _lk.identify(Path("/x/Red.Notice.2021.2160p.NF.WEB-DL.DDP.5.1.Atmos.DoVi.HDR.HEVC-SiC.mkv"))
+    assert _i["title"] == "Red Notice" and _i["year"] == 2021, _i
+    assert _lk.identify(Path("/x/home video.mkv"))["confidence"] < 0.6
+    assert not _lk.enabled(None) and not _lk.enabled("off") and _lk.enabled("auto"), "the lookup is opt-in"
+    assert _lk.facts_text({"used": False}) == ""
+    # the reference scorer (0.5.7): per-minute bins, chrF++, WER, coverage — on two tiny cue sets
+    from .refscore import score_pair, wer as _wer
+    from .srt import SrtCue as _SrtCue
+    _ref = [_SrtCue(0.0, 2.0, "Come here."), _SrtCue(3.0, 5.0, "I'll help you."), _SrtCue(70.0, 72.0, "Too late.")]
+    _hyp = [_SrtCue(0.5, 2.2, "Come here, I'll help you."), _SrtCue(69.0, 73.0, "Too late!")]
+    _r = score_pair(_ref, _hyp, "en", 60.0)
+    assert _r["bins_ref"] == 2 and _r["bins_hyp"] == 2 and _r["bins_both"] == 2 and _r["coverage"] == 1.0 and _r["chrf"] and _r["chrf"] > 60 and _r["wer"] == 0.0, _r
+    assert _wer(["a", "b", "c"], ["a", "b", "c"]) == 0.0 and _wer(["a", "b", "c"], ["a", "c"]) > 0 and _wer([], []) == 0.0
+    # the evidence track for the reconciler (0.5.6): the foreign lines for a chunk's seconds, in the prompt only
+    # where the LLM has to decide, never in the output
+    from .merge import evidence_for, merge_prompt
+    _ev = [(10.0, 12.5, "Vieni qui."), (12.6, 15.0, "Ti aiuto io."), (40.0, 42.0, "Troppo tardi.")]
+    assert evidence_for(_ev, 11.0, 14.0) == "Vieni qui.\nTi aiuto io." and evidence_for(_ev, 20.0, 30.0) == "" and evidence_for([], 0, 99) == ""
+    _s, _u = merge_prompt("come here", "come hear", "English", "a film", "", evidence_for(_ev, 11.0, 14.0), "Italian")
+    assert "EVIDENCE (Italian subtitles" in _u and "Vieni qui." in _u and "never output it" in _s
+    _s2, _u2 = merge_prompt("a", "b", "English", "a film", "")
+    assert "EVIDENCE" not in _u2 and "EVIDENCE" not in _s2
+    # the hedge detector (0.5.5): a form hedged with a slash is caught in any script; dates, fractions, URLs, AC/DC
+    # and plain alternatives of unrelated long words are not
+    from .translate import hedged
+    for s in ("Myslím, že by sis to měl/a nechat.", "ฉันยังไม่ได้อ่านค่ะ/ครับ.", "Si odličen/a pisec/pisateljica.",
+              "Είσαι εξαιρετικός/ή συγγραφέας.", "Imel/a sem občutek.", "sám/sama"):
+        assert hedged(s), s
+    for s in ("See https://example.org/path now", "3/4 of them", "12/06/2024", "AC/DC live", "yes/no", "Ich bin müde.",
+              "the input/output buffer", "Mr. and/or Mrs."):
+        assert not hedged(s), s
+    # the character sheet's parsing (0.5.4): one entry per person with aliases, evidence kept, voices mapped only to
+    # known names and well-formed tags; a bare JSON array (the old shape) still parses
+    from . import characters as _ch
+    class _Fake:
+        def __init__(self, out): self.out = out
+        def chat(self, system, user, **kw): return self.out
+    sheet, voices = _ch.build_sheet(_Fake('{"characters": [{"name": "Will", "aliases": ["Dad", "the father"], "gender": "m", "age": "adult", '
+                                           '"role": "father", "evidence": ["Daddy!"], "relations": [{"to": "Maya", "relation": "father", "status": "higher", '
+                                           '"evidence": "Oh, please! Daddy."}]}, {"name": "Maya", "gender": "f", "age": "child"}], '
+                                           '"voices": {"S1": "Will", "S2": "Maya", "S3": "Nobody", "bad": "Will"}}'), ["x"], "en", "a film", tagged=True)
+    assert [c["name"] for c in sheet] == ["Will", "Maya"] and sheet[0]["aliases"] == ["Dad", "the father"] and sheet[0]["evidence"] == ["Daddy!"]
+    assert sheet[0]["relations"][0]["evidence"].startswith("Oh, please") and sheet[1]["age"] == "child"
+    assert voices == {"S1": "Will", "S2": "Maya"}, voices
+    sheet2, voices2 = _ch.build_sheet(_Fake('[{"name": "Shin-chan", "gender": "m", "age": "child"}]'), ["x"], "ja", "an anime")
+    assert sheet2[0]["name"] == "Shin-chan" and voices2 == {} and sheet2[0]["aliases"] == []
+    rules = _ch.render_sheet(_Fake("Will: refers to himself as 僕…"), sheet, "en", "ja", "a film", voices=voices)
+    assert rules.startswith("[S1] is Will\n[S2] is Maya\n"), rules[:60]
     # caption remnants in an ordinary track (2026-10-04): uppercase labels and tags go, lowercase dialogue stays
     from .subs import clean_captions
     assert clean_captions("MAYA: (LAUGHING) You wanted to be President?") == "You wanted to be President?"
@@ -2305,6 +2427,12 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--backend", default=None)
     m.add_argument("--url", default=None)
     m.set_defaults(fn=cmd_models)
+    rs = sub.add_parser("refscore", help="score generated .srt files against the film's own human text tracks (chrF++ per minute, WER, coverage)")
+    rs.add_argument("video"); rs.add_argument("--out", required=True, help="folder holding <stem>.<lang>.srt files to score")
+    rs.add_argument("--lang", default=None, help="comma-separated codes to score (default: every language the film has a text track for)")
+    rs.add_argument("--bin", type=float, default=60.0, help="bin size in seconds (default 60)")
+    rs.add_argument("--json", default=None, help="also write the rows to this JSON file")
+    rs.set_defaults(fn=cmd_refscore)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.add_argument("--profile", default="auto", help="which hardware profile's offer and routes to show (auto = this card's)")
     ln.set_defaults(fn=cmd_languages)
