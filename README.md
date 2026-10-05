@@ -36,7 +36,8 @@ stretch of speech**, not per file, so a film that switches languages mid-scene w
 (Qwen3-ASR with its forced aligner, faster-whisper large-v3) decode every chunk and a local LLM reconciles them
 where they disagree; and the translation keeps a film's **names consistent** and its **characters in character**
 (who speaks, their gender, how they address each other — worked out once per film and given to every window).
-Every one of those claims has a measurement in this README, with its material and its reference named.
+The model and routing choices in this README are backed by measurements on named material; the character work
+is measured against human tracks by the `refscore` tool below, and its numbers follow as they are made.
 
 ## Install
 
@@ -93,9 +94,10 @@ with ~4B parameters active per token it stays fast mostly off the card — 84 to
 with 16, 40 with 8 — and translates almost as well as the 31B (chrF++ 30.2 against 31.0 on the same clip and
 reference) and read Thai bitmaps as well (76 % / 93.8 against 77 % / 93.7). The speeds are from a 24 GB card
 limited to those splits, so a real 16 GB card with the same split should land close, a slower CPU and RAM lower.
-Only `full` has run on its own hardware for weeks; the TranslateGemma routes apply to `full` only until it is
-measured on the smaller profiles. **Reports from real 8, 12 and 16 GB cards are the most useful issue this
-repository can receive.**
+Only `full` has run on its own hardware for weeks. The small profiles' TranslateGemma routes are configured from
+one overnight measurement (the 12B and 4B on all 44 languages, the 26B on the `16gb` split) made on the same 24 GB
+card limited to those splits; none of it has yet run on a physical 8, 12 or 16 GB card. **Reports from real 8,
+12 and 16 GB cards are the most useful issue this repository can receive.**
 
 ## Using it
 
@@ -139,7 +141,7 @@ interrupted run resumes from the work files; a skipped file remembers its verdic
 | embedded subs | a text track in a target language → that target is done; any other full text track (the spoken language's first; ASS cleaned of tags, karaoke and comments; an untagged track has its language read from its own words) → the transcript, no ASR. A **bitmap** (PGS) track is read through OCR — below |
 | probe · audio | `ffprobe` picks the audio track (tag, title, default; `--audio-track N` overrides); `ffmpeg` → 16 kHz mono wav |
 | speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU — below. **Labels** (0.5.4): when the transcript came from a text track and a target needs to know who speaks, the diarizer runs on the audio anyway (nothing is transcribed) and each cue takes the voice that covers it — a fact for the character sheet, which then says which voice is which character |
-| lookup | *opt-in, `--web-context auto`* (0.5.8): the title is identified from the file name and folders and looked up — Wikipedia first (summary, cast as "actor as character", the title in every target language), then your SearXNG, then the Brave API under a daily cap when SearXNG found too little; confirmed as a film or series, cached per title, every query recorded. The sheet gets the cast and relationships as priors, the glossary the localised title. Only the title and a search term leave the machine |
+| lookup | *opt-in, `--web-context auto`* (0.5.8): the title is identified from the file name and folders and looked up — Wikipedia first (summary, cast as "actor as character", the localised titles where Wikipedia has them), then your SearXNG, then the Brave API under a daily cap when SearXNG found too little; confirmed as a film or series, cached per title, every query recorded. The sheet gets the cast and relationships as **priors** — the dialogue wins where it contradicts them — and the glossary the localised title. Only the title and a search term leave the machine, and raw page text never reaches a translation prompt: it reaches the sheet builder alone, which extracts facts into the structured sheet the translator then sees, with the sources kept |
 | language ID | per ~10 s of speech, or per speaker turn: whisper's probability + Qwen's decode + the words' script and function words all have to agree; switch points refined to the exact span; a short run of another language needs strong evidence |
 | chunks · ASR | ≤ 30 s, one language each, covering the whole timeline (only the noise floor is skipped); both engines decode every chunk with its language forced; checkpointed per chunk |
 | merge | the translator LLM reconciles the two transcripts where they differ; chunks that agree need no LLM. When a target is the spoken language the audio is the source even if a foreign text track exists (an English film with only Italian subtitles is transcribed, not back-translated), and that track becomes **evidence**: its lines for the disputed seconds are shown to the reconciler, never output (0.5.6) |
@@ -147,7 +149,7 @@ interrupted run resumes from the work files; a skipped file remembers its verdic
 | terms | once per film, per target: the recurring names and terms (a script heuristic plus one LLM pass) rendered once — standard transliteration for names, the established form for titles — into the glossary every window reads; your `--glossary` wins |
 | characters | once per film: a chat model reads the transcript and lists who speaks — gender, age, role, who is whose parent, spouse, boss, friend, with *unknown* where the dialogue does not say — then, per target, turns that into the rules of address for that language: how each character refers to themselves, how they address each of the others (pronoun, kin term, title, politeness level, particles), and the grammatical gender of their own speech. Every window gets the sheet, so a father does not answer in the feminine, a ten-year-old does not call her father *vous*, and a Thai child stays หนู to her mother from the first scene to the last |
 | translate | per target: cues already in the target copied through; the rest in windows of 20 with context, glossary, characters, per-language register rules, speaker continuity, retry and per-line fallback; the **foreign-script guard** sends back any line with letters of a script that is neither the target's nor Latin (names and brands stay) |
-| repair | the **register repair** (0.5.5): a line that hedges a form with a slash (*měl/a*, *ค่ะ/ครับ*, *he/she*) is unusable on screen and detectable in any script, so only those lines go to a checker of the other model family — Qwen for a Gemma translation — with the source line and the sheet, to choose one form and change nothing else; counts in `why` |
+| repair | the **hedge repair** (0.5.5): a line that hedges a form with a slash (*měl/a*, *ค่ะ/ครับ*, *he/she*) is unusable on screen and detectable in any script, so only those lines go to a checker of the other model family — Qwen for a Gemma translation — with the source line and the sheet, to choose one form and change nothing else; counts in `why`. A **register validator** for the errors that carry no marker (a child saying *vous*, a wrong kin term, the wrong politeness level) is the designed next step and is not built |
 | typeset | ≤ 2 lines, per-language line width and reading speed, minimum duration and gaps, cluster-safe breaks for Thai, Lao, Khmer, Burmese and Devanagari → `<video>.<lang>.srt` |
 
 **Bitmap subtitles.** Blu-ray remuxes carry their subtitles as PGS bitmaps, often a dozen languages and no text
@@ -192,7 +194,7 @@ it for Hungarian, Catalan and Slovak. TranslateGemma is not the default for the 
 own: it defaults to formal address (a child saying *vous* to her father), hedges gender with slashes where the
 speaker is unknown (the 12B hedges every Thai line with *ค่ะ/ครับ*, so no TranslateGemma ever sees Thai), and its
 fixed prompt cannot take the character sheet — **so the routed languages get its words without the sheet's rules
-of address.** A narrow repair pass that touches only the lines a validator flags is the next step. The 27B on a
+of address**; the hedge repair catches its slashes, the register validator for the rest is the next step. The 27B on a
 16 GB split took 37 minutes a language, which is why the small profiles get the 12B whole rather than the 27B
 in part. Greek is withheld everywhere because the choice there is between the Gemmas' grammar errors and
 TranslateGemma's gender slashes; it returns when the repair pass is measured on it.
@@ -228,7 +230,9 @@ thirty text tracks is thirty references. The generated file for each language is
 chrF++ per minute of film so that distributors cutting the same dialogue into different cues is not punished,
 WER for a same-language pair (English generated from English audio against the English track), and coverage.
 This is how the register work, the labels and the routes are measured from here on, across every language a
-reference exists for, rather than by one reader's sample.
+reference exists for, rather than by one reader's sample. The number is comparative, not absolute: a higher
+chrF++ against the same human track is evidence that one arm is closer to it than another, not that a subtitle
+with different wording is wrong.
 
 **Language detection** (`mlsubgen lidbench VIDEO`, scored against the film's forced subtitle track — a lower bound,
 since songs and untranslated lines are foreign speech it does not show):
@@ -313,8 +317,8 @@ gates' thresholds) is in `mlsubgen/config.py` and documented there.
   language, `mlsubgen scan` shows what the detector sees without running the ASR.
 - The six TranslateGemma-routed languages get no character sheet; Greek is withheld; the tiers above are one
   reader's judgement on one episode and one film.
-- The small profiles are measured on a 24 GB card limited to their splits, and TranslateGemma on them is not
-  measured at all.
+- The small profiles, their routes included, are measured on a 24 GB card limited to their splits, not on the cards
+  they are for.
 - Diarization fragments feature-film casts and is off by default.
 - Specialised vocabulary in low-resource languages (an insect, a tree, a snake) is where the translators err
   most; a user glossary of a film's twenty key nouns is the cure.

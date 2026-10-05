@@ -50,8 +50,9 @@ SHEET_PROMPT = ("Below is the dialogue of {genre}, in {language}.{voices_note}{f
 VOICES_NOTE = (" Lines start with a voice tag like [S2] from automatic speaker detection: the same tag is the same "
                "voice throughout, a different tag a different voice; the tags say nothing about who the voice is.")
 VOICES_ASK = (" Also say which character each voice tag belongs to, where the dialogue makes it clear (the voice that "
-              "is called \"Dad\" by another voice, the voice that introduces itself); leave a tag out when unsure.")
-VOICES_FIELD = ", \"voices\": {\"S1\": <character name>, ...}"
+              "is called \"Dad\" by another voice, the voice that introduces itself), and quote the line that shows it; "
+              "leave a tag out when unsure — a wrong voice would misgender a character in every line.")
+VOICES_FIELD = ", \"voices\": {\"S1\": {\"character\": <character name>, \"evidence\": <a short quote from the dialogue>}, ...}"
 
 RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:\n{sheet}\n{voices_line}\n"
                  "Write the rules a {target} subtitle translator must follow so that every character sounds right and "
@@ -105,8 +106,19 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
                                      "status": str(r.get("status", "equal"))[:6], "evidence": str(r.get("evidence", ""))[:120]}
                                     for r in (d.get("relations") or []) if isinstance(r, dict)][:8]})
     names = {c["name"] for c in sheet} | {a for c in sheet for a in c["aliases"]}
-    voices = {str(k)[:4]: str(v)[:40] for k, v in (voices_raw or {}).items()
-              if isinstance(voices_raw, dict) and re.fullmatch(r"S\d{1,2}", str(k)) and str(v) in names}
+    # evidence-gated (0.5.11): a voice maps to a character only with a quoted line behind it and a name the sheet
+    # knows; a bare name, or an entry without evidence, is dropped — the translator then infers the speaker from the
+    # dialogue for that voice, as it does without labels, rather than being told something unsupported
+    voices: dict[str, dict] = {}
+    for k, v in (voices_raw or {}).items() if isinstance(voices_raw, dict) else []:
+        if not re.fullmatch(r"S\d{1,2}", str(k)):
+            continue
+        if isinstance(v, dict):
+            name, ev = str(v.get("character", ""))[:40], str(v.get("evidence", "")).strip()[:160]
+        else:
+            name, ev = str(v)[:40], ""
+        if name in names and ev:
+            voices[str(k)] = {"character": name, "evidence": ev}
     return sheet[:8], voices
 
 
@@ -118,7 +130,7 @@ def render_sheet(client, sheet: list[dict], source: str, target: str, genre: str
     slim = [{k: v for k, v in c.items() if k != "evidence"} for c in sheet]        # the quotes are for `why`, not the prompt
     for c in slim:
         c["relations"] = [{k: v for k, v in r.items() if k != "evidence"} for r in c.get("relations", [])]
-    voices_line = ("Voice tags in the dialogue: " + "; ".join(f"[{k}] is {v}" for k, v in sorted(voices.items())) + ".\n") if voices else ""
+    voices_line = ("Voice tags in the dialogue: " + "; ".join(f"[{k}] is {_who(v)}" for k, v in sorted(voices.items())) + ".\n") if voices else ""
     prompt = RENDER_PROMPT.format(genre=genre, source=config.LANG_NAMES.get(source, source),
                                   target=config.LANG_NAMES.get(target, target), sheet=json.dumps(slim, ensure_ascii=False),
                                   voices_line=voices_line)
@@ -128,12 +140,17 @@ def render_sheet(client, sheet: list[dict], source: str, target: str, genre: str
         _log(f"[characters] ⚠ rendering call failed: {e}")
         return ""
     lines = [l.strip() for l in out.splitlines() if l.strip() and not l.strip().startswith("```")]
-    head = [f"[{k}] is {v}" for k, v in sorted((voices or {}).items())]
+    head = [f"[{k}] is {_who(v)}" for k, v in sorted((voices or {}).items())]
     return "\n".join(head + lines)[:2800]
 
 
-def summarise(sheet: list[dict], voices: dict[str, str] | None = None) -> str:
+def _who(v) -> str:
+    """The character behind a voice entry — the 0.5.11 dict form or the earlier bare name."""
+    return v.get("character", "") if isinstance(v, dict) else str(v)
+
+
+def summarise(sheet: list[dict], voices: dict | None = None) -> str:
     s = ", ".join(f"{c['name']} ({c['gender']}, {c['age']})" for c in sheet)
     if voices:
-        s += " — voices: " + ", ".join(f"{k}={v}" for k, v in sorted(voices.items()))
+        s += " — voices: " + ", ".join(f"{k}={_who(v)}" for k, v in sorted(voices.items()))
     return s

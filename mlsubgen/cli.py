@@ -1615,7 +1615,9 @@ def cmd_why(a: argparse.Namespace) -> int:
         print(f"  characters: " + ("; ".join(f"{x['name']} ({x.get('gender', '?')}, {x.get('age', '?')}"
                                               + (", " + ", ".join(f"{r.get('relation')} of {r.get('to')}" for r in x.get("relations", [])[:2]) if x.get("relations") else "")
                                               + (f"; evidence: {x['evidence'][0]!r}" if x.get("evidence") else "") + ")" for x in sheet) or "none")
-              + (f" — voices: " + ", ".join(f"{k}={v}" for k, v in sorted((c.get("voices") or {}).items())) if c.get("voices") else "")
+              + (f" — voices: " + ", ".join(f"{k}={v.get('character') if isinstance(v, dict) else v}"
+                                            + (f" ({v['evidence'][:60]!r})" if isinstance(v, dict) and v.get("evidence") else "")
+                                            for k, v in sorted((c.get("voices") or {}).items())) if c.get("voices") else "")
               + f" — rules rendered for {', '.join(k for k, v in (c.get('renderings') or {}).items() if v) or 'nothing yet'} ({c.get('model')})")
     for t, o in (data.get("ocr_targets") or {}).items():
         out = srt_path_for(video, t)
@@ -2271,14 +2273,18 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     sheet, voices = _ch.build_sheet(_Fake('{"characters": [{"name": "Will", "aliases": ["Dad", "the father"], "gender": "m", "age": "adult", '
                                            '"role": "father", "evidence": ["Daddy!"], "relations": [{"to": "Maya", "relation": "father", "status": "higher", '
                                            '"evidence": "Oh, please! Daddy."}]}, {"name": "Maya", "gender": "f", "age": "child"}], '
-                                           '"voices": {"S1": "Will", "S2": "Maya", "S3": "Nobody", "bad": "Will"}}'), ["x"], "en", "a film", tagged=True)
+                                           '"voices": {"S1": {"character": "Will", "evidence": "[S2] Oh, please! Daddy. [S1] Oh, come on!"}, '
+                                           '"S2": "Maya", "S3": {"character": "Nobody", "evidence": "x"}, "S4": {"character": "Maya", "evidence": ""}, '
+                                           '"bad": {"character": "Will", "evidence": "y"}}}'), ["x"], "en", "a film", tagged=True)
     assert [c["name"] for c in sheet] == ["Will", "Maya"] and sheet[0]["aliases"] == ["Dad", "the father"] and sheet[0]["evidence"] == ["Daddy!"]
     assert sheet[0]["relations"][0]["evidence"].startswith("Oh, please") and sheet[1]["age"] == "child"
-    assert voices == {"S1": "Will", "S2": "Maya"}, voices
+    # evidence-gated (0.5.11): S1 has a quote and a known name → kept; S2 is a bare name, S3 an unknown name, S4 has no
+    # evidence, "bad" is not a tag → all dropped
+    assert list(voices) == ["S1"] and voices["S1"]["character"] == "Will" and voices["S1"]["evidence"].startswith("[S2] Oh"), voices
     sheet2, voices2 = _ch.build_sheet(_Fake('[{"name": "Shin-chan", "gender": "m", "age": "child"}]'), ["x"], "ja", "an anime")
     assert sheet2[0]["name"] == "Shin-chan" and voices2 == {} and sheet2[0]["aliases"] == []
     rules = _ch.render_sheet(_Fake("Will: refers to himself as 僕…"), sheet, "en", "ja", "a film", voices=voices)
-    assert rules.startswith("[S1] is Will\n[S2] is Maya\n"), rules[:60]
+    assert rules.startswith("[S1] is Will\nWill:"), rules[:60]
     # caption remnants in an ordinary track (2026-10-04): uppercase labels and tags go, lowercase dialogue stays
     from .subs import clean_captions
     assert clean_captions("MAYA: (LAUGHING) You wanted to be President?") == "You wanted to be President?"
