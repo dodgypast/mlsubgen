@@ -63,7 +63,12 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "each of the others they talk to (pronoun, kin term, title or name, and the politeness level or "
                  "particles/verb forms that go with it), and the grammatical gender to use for their own speech where "
                  "{target} marks it. Be specific to {target}; if {target} makes no such distinctions, say so in one "
-                 "line and give only the genders. Short lines, no explanations, no JSON.")
+                 "line and give only the genders. Where {target} distinguishes an informal and a formal address (tu/vous, "
+                 "du/Sie, 반말/존댓말, plain/polite forms): friends, partners, spouses, siblings, parents and children, "
+                 "and colleagues who know each other well take the INFORMAL form; strangers, a superior addressed by a "
+                 "subordinate, officials, a court, a customer take the FORMAL; a character the sheet lists with a "
+                 "relation \"friend\" or \"partner\" or \"colleague\" and status \"equal\" is informal unless the setting "
+                 "is official. Short lines, no explanations, no JSON.")
 
 
 def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = False, facts: str = "") -> tuple[list[dict], dict[str, str]]:

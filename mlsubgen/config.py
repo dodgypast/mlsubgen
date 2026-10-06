@@ -428,8 +428,9 @@ EVIDENCE_RANK: dict[str, int] = {
 }
 
 # ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
-CHARACTERS_VERSION = 4         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
-                               #  3: a voice maps to a character only with a quoted line behind it; 4: a tag is never a name)
+CHARACTERS_VERSION = 5         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
+                               #  3: a voice maps to a character only with a quoted line behind it; 4: a tag is never a name;
+                               #  5: the informal/formal mapping stated to the renderer — the French diagnosis of 2026-10-06)
 LABELS_VERSION = 1             # speaker labels on a text track's cues (0.5.4): bump when the labelling changes
 CHARACTERS_MIN_CUES = 40       # a clip shorter than this has no recurring characters worth a sheet
 CHARACTERS_CHARS = 14000       # transcript text the sheet call reads (sampled evenly beyond that)
