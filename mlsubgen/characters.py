@@ -81,17 +81,28 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
                                  voices_note=VOICES_NOTE if tagged else "", voices_ask=VOICES_ASK if tagged else "",
                                  voices_field=VOICES_FIELD if tagged else "",
                                  facts_note=FACTS_NOTE.format(facts=facts) if facts else "")
-    try:
-        out = client.chat(None, prompt, max_tokens=1600)
-    except Exception as e:                               # noqa: BLE001
-        _log(f"[characters] ⚠ sheet call failed: {e}")
-        return [], {}
-    m = re.search(r"\{.*\}|\[.*\]", out, re.S)
-    if not m:
-        return [], {}
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
+    data = None
+    for attempt, p in enumerate((prompt, None)):
+        if p is None:                                    # the retry (0.5.19): the same question without the facts block,
+            if not facts:                                #  for a smaller model that choked on the longer prompt
+                break
+            p = SHEET_PROMPT.format(genre=genre, language=config.LANG_NAMES.get(lang, lang), text=text,
+                                    voices_note=VOICES_NOTE if tagged else "", voices_ask=VOICES_ASK if tagged else "",
+                                    voices_field=VOICES_FIELD if tagged else "", facts_note="")
+            _log("[characters] the sheet did not parse with the facts block — asking again without it")
+        try:
+            out = client.chat(None, p, max_tokens=1600)
+        except Exception as e:                           # noqa: BLE001
+            _log(f"[characters] ⚠ sheet call failed: {e}")
+            return [], {}
+        m = re.search(r"\{.*\}|\[.*\]", out, re.S)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+                break
+            except json.JSONDecodeError:
+                data = None
+    if data is None:
         return [], {}
     chars = data.get("characters") if isinstance(data, dict) else data
     voices_raw = data.get("voices") if isinstance(data, dict) else {}

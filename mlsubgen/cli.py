@@ -1570,6 +1570,7 @@ def cmd_regscore(a: argparse.Namespace) -> int:
     language and feature, how often the generated line shows the same particle / pronoun / politeness / gender as
     the human line for the same seconds. See register.py."""
     import json
+    import re
     from . import register as rg
     from .probe import probe
     from .srt import read_srt
