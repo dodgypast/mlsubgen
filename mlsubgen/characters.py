@@ -68,7 +68,15 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "and colleagues who know each other well take the INFORMAL form; strangers, a superior addressed by a "
                  "subordinate, officials, a court, a customer take the FORMAL; a character the sheet lists with a "
                  "relation \"friend\" or \"partner\" or \"colleague\" and status \"equal\" is informal unless the setting "
-                 "is official. Short lines, no explanations, no JSON.")
+                 "is official. Where {target} addresses people by kin terms or role terms (Thai, Vietnamese, Burmese, "
+                 "Khmer, Indonesian, Malay, Tagalog, Korean kin terms), choose each pair's OWN terms by relationship and "
+                 "relative age, never a polite default: a teacher and a pupil take the school pair (Vietnamese thầy/cô "
+                 "and em; Thai ครู and หนู or เธอ), a parent and a child the family pair (bố/mẹ and con; พ่อ/แม่ and "
+                 "ลูก or หนู), an unrelated adult and a child the uncle/aunt pair (chú/cô and cháu; ลุง/น้า and หนู), "
+                 "two adults who are peers, rivals, partners or friends the casual pair of their sexes (Vietnamese "
+                 "cậu/tớ or anh/em by age, mày/tao when rough; Thai นาย/ฉัน between men, เธอ/ฉัน otherwise, แก/ข้า "
+                 "when rough); keep the polite forms (tôi and anh/chị with ạ; คุณ with ผม/ดิฉัน and ครับ/ค่ะ) for "
+                 "strangers, officials, customers and superiors. Short lines, no explanations, no JSON.")
 
 
 def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = False, facts: str = "") -> tuple[list[dict], dict[str, str]]:
