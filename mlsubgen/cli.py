@@ -1552,6 +1552,7 @@ def cmd_ocrbench(a: argparse.Namespace) -> int:
 def cmd_refscore(a: argparse.Namespace) -> int:
     """`mlsubgen refscore VIDEO --out DIR` — the generated files in DIR against the film's own human text tracks
     (0.5.7): chrF++ per minute of film, WER for a same-language pair, coverage. See refscore.py."""
+    import json
     from . import refscore as rsc
     video, out = Path(a.video).expanduser(), Path(a.out).expanduser()
     langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
@@ -1559,6 +1560,45 @@ def cmd_refscore(a: argparse.Namespace) -> int:
     if not rows:
         _log("nothing to score: no language has both a text track in the file and a generated .srt in --out"); return 1
     rsc.print_table(rows, f"{video.name} — generated files in {out} against the film's own tracks (bins of {a.bin:.0f}s)")
+    if a.json:
+        Path(a.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return 0
+
+
+def cmd_regscore(a: argparse.Namespace) -> int:
+    """`mlsubgen regscore VIDEO --out DIR` — register agreement with the film's own human tracks (0.5.18): per
+    language and feature, how often the generated line shows the same particle / pronoun / politeness / gender as
+    the human line for the same seconds. See register.py."""
+    import json
+    from . import register as rg
+    from .probe import probe
+    from .srt import read_srt
+    from .subs import code_for_tag, cues_from_track, extract_track
+    video, out = Path(a.video).expanduser(), Path(a.out).expanduser()
+    langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
+    rows = []
+    pr = probe(video)
+    for t in pr.subs:
+        if not t.is_text:
+            continue
+        code = code_for_tag(t.language) or t.language
+        if (langs and code not in langs) or code not in rg.FEATURES or re.search(r"sdh|forced|commentary", t.title or "", re.I):
+            continue
+        hyp = out / f"{video.stem}.{code}.srt"
+        if not hyp.is_file():
+            continue
+        tmp = out / f"{video.stem}.ref.{code}.s{t.index}.srt"
+        try:
+            extract_track(video, t.index, tmp, t.codec)
+            ref = cues_from_track(tmp, code)
+        finally:
+            tmp.unlink(missing_ok=True)
+        if len(ref) < 20:
+            continue
+        rows.append(rg.register_agreement(ref, read_srt(hyp), code))
+    if not rows:
+        _log("nothing to score: no language with a feature set has both a text track and a generated .srt in --out"); return 1
+    rg.print_register(rows, f"{video.name} — register agreement of {out} with the film's own tracks")
     if a.json:
         Path(a.json).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     return 0
@@ -2310,6 +2350,23 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check_speakers(argparse.Namespace(speakers="many")); raise AssertionError("an unknown value must be refused")
     except SystemExit:
         pass
+    # register agreement (0.5.18): features read off lines, pairs by overlap, agreement per feature class
+    from . import register as _rg
+    from .srt import SrtCue as _SrtCue
+    assert _rg.features_of("ไม่เป็นไรค่ะ หนูไม่ได้อ่าน", "th") == {"particle": {"f"}, "self": {"nu"}}
+    assert _rg.features_of("ผมไม่รู้ครับ คุณพ่อ", "th") == {"particle": {"m"}, "self": {"phom"}, "address": {"khun", "kin"}}
+    assert _rg.features_of("Tu viens ? Je t'attends.", "fr") == {"tv": {"tu"}} and _rg.features_of("Vous venez ?", "fr") == {"tv": {"vous"}}
+    assert _rg.features_of("Kommst du? Sie auch?", "de") == {"tv": {"du", "sie"}} and _rg.features_of("Ich sehe sie.", "de") == {}, "lower-case sie is not the formal address"
+    assert _rg.features_of("오셨어요?", "ko") == {"polite": {"polite"}} and _rg.features_of("왔어?", "ko") == {"polite": {"plain"}}
+    assert _rg.features_of("僕は行きます。", "ja") == {"polite": {"polite"}, "self": {"boku"}} and _rg.features_of("行くよ", "ja") == {"polite": {"plain"}}
+    assert _rg.features_of("את באה?", "he") == {"you": {"f"}} and _rg.features_of("אתה בא?", "he") == {"you": {"m"}}
+    assert _rg.features_of("Em lo anh thay đổi.", "vi") == {"pronoun": {"anh", "em"}} and _rg.features_of("Tôi không biết.", "vi") == {"pronoun": {"toi"}}
+    assert _rg.features_of("Myslíš, že ty to zvládneš?", "cs") == {"tv": {"ty"}} and _rg.features_of("Můžete mi pomoct, vy?", "cs") == {"tv": {"vy"}}
+    _r = [_SrtCue(0.0, 2.0, "Tu viens ?"), _SrtCue(3.0, 5.0, "Vous venez, monsieur ?"), _SrtCue(6.0, 8.0, "Bonjour.")]
+    _h = [_SrtCue(0.1, 2.1, "Tu viens ?"), _SrtCue(3.0, 5.0, "Tu viens, monsieur ?"), _SrtCue(6.0, 8.0, "Salut.")]
+    _a = _rg.register_agreement(_r, _h, "fr")
+    assert _a["pairs"] == 3 and _a["classes"]["tv"] == {"n": 2, "agree": 1, "absent": 0, "rate": 50.0, "absent_rate": 0.0}, _a
+    assert _rg.register_agreement(_r, [], "fr")["pairs"] == 0 and _rg.features_of("anything", "sv") == {}
     # the reference scorer (0.5.7): per-minute bins, chrF++, WER, coverage — on two tiny cue sets
     from .refscore import score_pair, wer as _wer
     from .srt import SrtCue as _SrtCue
@@ -2543,6 +2600,11 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--bin", type=float, default=60.0, help="bin size in seconds (default 60)")
     rs.add_argument("--json", default=None, help="also write the rows to this JSON file")
     rs.set_defaults(fn=cmd_refscore)
+    rg = sub.add_parser("regscore", help="register agreement of generated .srt files with the film's own human tracks: particles, tu/vous, politeness, gender — per feature")
+    rg.add_argument("video"); rg.add_argument("--out", required=True, help="folder holding <stem>.<lang>.srt files to score")
+    rg.add_argument("--lang", default=None, help="comma-separated codes (default: every language with a feature set and a text track)")
+    rg.add_argument("--json", default=None)
+    rg.set_defaults(fn=cmd_regscore)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.add_argument("--profile", default="auto", help="which hardware profile's offer and routes to show (auto = this card's)")
     ln.set_defaults(fn=cmd_languages)

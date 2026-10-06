@@ -48,7 +48,9 @@ SHEET_PROMPT = ("Below is the dialogue of {genre}, in {language}.{voices_note}{f
                 "film.{voices_ask} Answer with JSON only, no prose: an object {{\"characters\": [...]{voices_field}}}."
                 "\n\n{text}")
 VOICES_NOTE = (" Lines start with a voice tag like [S2] from automatic speaker detection: the same tag is the same "
-               "voice throughout, a different tag a different voice; the tags say nothing about who the voice is.")
+               "voice throughout, a different tag a different voice; the tags say nothing about who the voice is. A "
+               "tag is never a name: a character whose name is not spoken gets a label like \"the father\" or \"a "
+               "teacher\", and a voice you cannot place is simply left out of \"voices\".")
 VOICES_ASK = (" Also say which character each voice tag belongs to, where the dialogue makes it clear (the voice that "
               "is called \"Dad\" by another voice, the voice that introduces itself), and quote the line that shows it; "
               "leave a tag out when unsure — a wrong voice would misgender a character in every line.")
@@ -96,6 +98,8 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
     sheet = []
     for d in chars if isinstance(chars, list) else []:
         if not isinstance(d, dict) or not d.get("name"):
+            continue
+        if re.fullmatch(r"\[?S\d{1,2}\]?", str(d.get("name")).strip()):      # a voice tag is not a name (night one, 2026-10-05)
             continue
         sheet.append({"name": str(d.get("name"))[:40],
                       "aliases": [str(a)[:40] for a in (d.get("aliases") or []) if isinstance(a, str)][:6],
