@@ -76,7 +76,10 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "two adults who are peers, rivals, partners or friends the casual pair of their sexes (Vietnamese "
                  "cậu/tớ or anh/em by age, mày/tao when rough; Thai นาย/ฉัน between men, เธอ/ฉัน otherwise, แก/ข้า "
                  "when rough); keep the polite forms (tôi and anh/chị with ạ; คุณ with ผม/ดิฉัน and ครับ/ค่ะ) for "
-                 "strangers, officials, customers and superiors. Short lines, no explanations, no JSON.")
+                 "strangers, officials, customers and superiors. Two calibrations: Polish keeps pan / pani between adults "
+                 "who are not family or close friends, including long-standing colleagues, far longer than French keeps "
+                 "vous; Greek similarly keeps εσείς between adult acquaintances and in any professional setting. Short "
+                 "lines, no explanations, no JSON.")
 
 
 def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = False, facts: str = "") -> tuple[list[dict], dict[str, str]]:

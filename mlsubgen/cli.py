@@ -195,9 +195,12 @@ def cmd_languages(a: argparse.Namespace) -> int:
     print(f"\n{len(config.TARGET_LANGS)} languages · defaults: {config.DEFAULT_TARGETS} (MLSUBGEN_TARGETS, or --target per run)")
     print(f"translator: the route for this profile ({getattr(config, 'PROFILE', 'auto')}) — `-t NAME` forces one for every pair; the foreign-script guard "
           f"applies to every translation; `mlsubgen why FILE` says what a finished file actually got")
-    print(f"withheld as targets (measured below shippable; still read as sources): "
-          + ", ".join(f"{config.LANG_NAMES[c]} ({config.WITHHELD_REASON.get(c, 'measured below shippable')})"
-                      for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
+    if config.UNSUPPORTED_TARGETS:
+        print(f"withheld as targets (measured below shippable; still read as sources): "
+              + ", ".join(f"{config.LANG_NAMES[c]} ({config.WITHHELD_REASON.get(c, 'measured below shippable')})"
+                          for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
+    else:
+        print("nothing is withheld: every known language is offered as a target (2026-10-07), seven with known errors — see the README's tiers")
     return 0
 
 
@@ -2029,7 +2032,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     from .subs import LANG_TAGS as _LT, code_for_tag, pick as _pick, plan_embedded
     assert all(c in _LT for c in config.LANG_NAMES) and code_for_tag("tgl") == "tl" and code_for_tag("khm") == "km"
     # targets withheld (2026-10-03): still known languages, not offered as targets; the CLI refuses them plainly
-    assert len(config.TARGET_LANGS) == 44 and len(config.LANG_NAMES) == 45 and "el" not in config.TARGET_LANGS and "el" in config.LANG_NAMES
+    assert len(config.TARGET_LANGS) == 45 and len(config.LANG_NAMES) == 45 and "el" in config.TARGET_LANGS, "Greek returned 2026-10-07"
     assert "hu" in config.TARGET_LANGS and "my" in config.TARGET_LANGS, "returned 2026-10-04"
     # per-profile offer (2026-10-04): a profile withholds what is measured below shippable on ITS translators;
     # unmeasured profiles inherit the full profile's set, and apply_profile() rebuilds the offer
@@ -2038,7 +2041,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     _prev = config.PROFILE
     from .translate import route as _route
     config.apply_profile("8gb")
-    assert "el" not in config.TARGET_LANGS and len(config.TARGET_LANGS) == 44
+    assert "el" in config.TARGET_LANGS and len(config.TARGET_LANGS) == 45
     assert "translategemma-12b" in config.TRANSLATORS and config.TRANSLATORS["translategemma-4b"].prompt_style == "translategemma"
     # the small profiles' routes (2026-10-05): the 12B where the 26B invents words, the 4B on 8 GB, never for Thai
     assert _route("en", "hu") == "translategemma-4b" and _route("en", "sl") == "gemma4-26b" and _route("en", "th") == "gemma4-26b"
@@ -2057,13 +2060,21 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert foreign_script("蠟筆小新 says OK", "zh") == 0 and foreign_script("Shin-chan はカブトムシが好き", "zh") > 0
     assert foreign_script("ทำให้ นะ", "th") == 0 and foreign_script("日本語の字幕", "ja") == 0 and foreign_script("한국어 자막 OK", "ko") == 0
     assert config.LANG_NAMES["zh"].endswith("(Simplified)") and config.LANG_NAMES["yue"].endswith("(Traditional)")
+    # the withholding machinery still works when a language is withheld (nothing is, since 0.6.0): tested on a
+    # temporary set, restored afterwards
+    _saved_w, _saved_t = set(config.UNSUPPORTED_TARGETS), dict(config.TARGET_LANGS)
+    config.UNSUPPORTED_TARGETS.add("el"); config.TARGET_LANGS.pop("el", None)
     try:
-        parse_targets("en,el", warn=False)
-        raise AssertionError("a withheld target must be refused")
-    except SystemExit as e:
-        assert "Greek" in str(e)
-    assert parse_targets("en,th", warn=False) == ["en", "th"]
-    assert parse_targets("el", warn=False, allow_withheld=True) == ["el"], "the bench may measure a withheld language"
+        try:
+            parse_targets("en,el", warn=False)
+            raise AssertionError("a withheld target must be refused")
+        except SystemExit as e:
+            assert "Greek" in str(e)
+        assert parse_targets("el", warn=False, allow_withheld=True) == ["el"], "the bench may measure a withheld language"
+    finally:
+        config.UNSUPPORTED_TARGETS.clear(); config.UNSUPPORTED_TARGETS.update(_saved_w)
+        config.TARGET_LANGS.clear(); config.TARGET_LANGS.update(_saved_t)
+    assert parse_targets("en,th", warn=False) == ["en", "th"] and parse_targets("el", warn=False) == ["el"], "Greek is offered since 0.6.0"
     assert code_for_tag("JPN") == "ja" and code_for_tag("und") is None and code_for_tag("xx") is None
     tracks = [_ST(0, 2, "khm", "", "subrip", True, False, False), _ST(1, 3, "und", "Bahasa Melayu", "ass", True, False, False),
               _ST(2, 4, "eng", "Signs & Songs", "ass", True, False, False), _ST(3, 5, "eng", "", "subrip", True, True, False),

@@ -61,8 +61,11 @@ SOURCE_LANGS = set(LANG_NAMES)
 # foreign-script guard sends a leaking line back (their faults were leaks, two reviewers found Burmese usable
 # otherwise). Greek stays withheld: the choice there is between the 31B's grammar errors and TranslateGemma's
 # gender slashes, and the character sheet has to settle that first.
-UNSUPPORTED_TARGETS = {"el"}
-WITHHELD_REASON = {"el": "the 31B's grammar errors vs TranslateGemma's gender slashes — returns once the character sheet is measured on it (2026-10-04)"}
+# 2026-10-07: Greek returns. Six 25-minute cuts of three films against their human Greek tracks: chrF++ 49 on the
+# 31B, between Russian (50) and Vietnamese (49), register agreement 54–58 % — offered with its errors admitted,
+# like the other "known errors" languages, now that the number exists. Nothing is withheld.
+UNSUPPORTED_TARGETS: set[str] = set()
+WITHHELD_REASON: dict[str, str] = {}
 # Per profile (2026-10-04): a smaller card runs a smaller translator, and a language that reads well on the 31B
 # may not on the 26B or the 4B. Each profile withholds what has been measured below shippable on ITS translators;
 # until a profile has its own measurement it inherits the full profile's set (the overnight batch of 2026-10-04 is
@@ -428,7 +431,8 @@ EVIDENCE_RANK: dict[str, int] = {
 }
 
 # ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
-CHARACTERS_VERSION = 6         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
+CHARACTERS_VERSION = 7         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
+                               #  7: Polish and Greek keep the formal form longer — the six-cut measurement of 2026-10-07;
                                #  6: kin-term pairs by relationship — the Vietnamese and Thai diagnoses of 2026-10-06;
                                #  3: a voice maps to a character only with a quoted line behind it; 4: a tag is never a name;
                                #  5: the informal/formal mapping stated to the renderer — the French diagnosis of 2026-10-06)

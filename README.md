@@ -1,4 +1,4 @@
-# mlsubgen — subtitles in 44 languages for your videos, entirely on your own machine
+# mlsubgen — subtitles in 45 languages for your videos, entirely on your own machine
 
 ```
 cd /some/folder/of/videos
@@ -107,7 +107,7 @@ mlsubgen --target en,th,de .     # three subtitle files per video
 mlsubgen --source ja FOLDER      # skip the language detector: the audio is Japanese
 mlsubgen --overwrite FILE        # redo one file from scratch
 mlsubgen --speakers auto FOLDER  # the full speaker feature on the audio path (default: labels only);  --speakers 3  when you know the count
-mlsubgen languages               # the 44 offered codes, native names, which engine decodes each, which translator each goes to
+mlsubgen languages               # the 45 codes, native names, which engine decodes each, which translator each goes to
 mlsubgen config targets th,de    # save the default languages;  config  shows all settings
 mlsubgen models                  # what is ready: translators in Ollama, ASR models in the cache
 mlsubgen pull                    # download what the profile needs;  pull gemma4 · pull some/tag:latest · pull --all
@@ -176,15 +176,18 @@ usable structure — one voice, or dozens — is processed as without the option
 
 45 languages are known: every one is a **source** (a subtitle track in it is read; Qwen3-ASR decodes the languages
 its aligner covers — Japanese, Chinese, Cantonese, Korean, English, French, German, Italian, Portuguese, Russian,
-Spanish — and whisper the rest), and **44 are offered as targets**. Which translator a target goes to is a
+Spanish — and whisper the rest), and **all 45 are offered as targets**, eight with known errors. Which translator a target goes to is a
 measured choice per language, and `mlsubgen languages` shows it for the active profile:
 
-| profile | default translator | Japanese → English | the invented-word languages go to | withheld |
-|---|---|---|---|---|
-| `full` | `gemma4:31b-it-qat` (19 GB), with the character sheet and the per-language register rules | `qwen3.8:27b` (18 GB) | `translategemma:27b` (17 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish | Greek |
-| `16gb`, `12gb` | `gemma4:26b` (18 GB, MoE, part on the card) | the 26B | `translategemma:12b` (8.1 GB, whole on the card): the six above plus Slovak and Slovenian | Greek |
-| `8gb` | `gemma4:26b` (6 layers on the card) | the 26B | `translategemma:4b` (3.3 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish, Slovak | Greek |
-| `12gb-dense`, `8gb-dense` | `gemma4:12b` / `gemma4:e4b` | the same | the same 12B / 4B routes (unmeasured on these) | Greek |
+| profile | default translator | Japanese → English | the invented-word languages go to |
+|---|---|---|---|
+| `full` | `gemma4:31b-it-qat` (19 GB), with the character sheet and the per-language register rules | `qwen3.8:27b` (18 GB) | `translategemma:27b` (17 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish |
+| `16gb`, `12gb` | `gemma4:26b` (18 GB, MoE, part on the card) | the 26B | `translategemma:12b` (8.1 GB, whole on the card): the six above plus Slovak and Slovenian |
+| `8gb` | `gemma4:26b` (6 layers on the card) | the 26B | `translategemma:4b` (3.3 GB): Hungarian, Lithuanian, Latvian, Estonian, Catalan, Finnish, Slovak |
+| `12gb-dense`, `8gb-dense` | `gemma4:12b` / `gemma4:e4b` | the same | the same 12B / 4B routes (unmeasured on these) |
+
+Nothing is withheld any more: Greek returned on 2026-10-07 when six cuts of three films measured it against their
+human Greek tracks (chrF++ 49, between Russian and Vietnamese), and it is offered with its errors admitted.
 
 The routes come from one film in 44 languages and five translators, scored on 2026-10-04 and 05 by
 dictionary-unknown words, script purity and reading. On the routed languages the TranslateGemmas' unknown-word
@@ -196,19 +199,18 @@ speaker is unknown (the 12B hedges every Thai line with *ค่ะ/ครับ*
 fixed prompt cannot take the character sheet — **so the routed languages get its words without the sheet's rules
 of address**; the hedge repair catches its slashes, the register validator for the rest is the next step. The 27B on a
 16 GB split took 37 minutes a language, which is why the small profiles get the 12B whole rather than the 27B
-in part. Greek is withheld everywhere because the choice there is between the Gemmas' grammar errors and
-TranslateGemma's gender slashes; it returns when the repair pass is measured on it.
+in part.
 
-How the 44 read, from one episode translated into all of them on 2026-10-03 and the same scene read in each by a
+How they read, from one episode translated into all of them on 2026-10-03 and the same scene read in each by a
 competent reader rather than a native speaker (English is a target but not in the tiers: it was the source):
 
 - **Read well (29):** Japanese, Cantonese, Korean, Thai, French, German, Spanish, Italian, Portuguese, Russian,
   Indonesian, Vietnamese, Turkish, Dutch, Polish, Czech, Swedish, Danish, Finnish, Norwegian, Romanian, Ukrainian,
   Malay, Filipino, Persian, Arabic, Hindi, Bengali, Tamil — natural register for the material, idioms where the
   language has them, names consistent.
-- **Usable, with known errors (7):** Chinese, Hebrew, Bulgarian, Croatian, Catalan, Slovak, Slovenian — a wrong
-  or invented word every ten to twenty lines. Offered, because something is better than nothing when the limit
-  is stated; `bench` on your own material before a long run.
+- **Usable, with known errors (8):** Chinese, Hebrew, Bulgarian, Croatian, Catalan, Slovak, Slovenian, Greek — a
+  wrong or invented word every ten to twenty lines. Offered, because something is better than nothing when the
+  limit is stated; `bench` on your own material before a long run.
 - **Returned (7):** Hungarian, Lithuanian, Latvian, Estonian on TranslateGemma; Khmer, Lao and Burmese on the 31B
   once the foreign-script guard existed — their fault was other scripts' letters leaking in, and two independent
   reviewers found the Burmese otherwise usable (meaning fidelity good, specialised nouns weak, register
@@ -225,14 +227,46 @@ Every number names its material and its reference, and the command that produced
 between alternatives on the same material, which is what they were used for; a different film can rank the
 alternatives differently, which is why the benches exist — run the same comparison on yours.
 
-**Against the film's own human tracks** (`mlsubgen refscore VIDEO --out DIR`, 0.5.7): a release that carries
-thirty text tracks is thirty references. The generated file for each language is scored against the human track,
-chrF++ per minute of film so that distributors cutting the same dialogue into different cues is not punished,
-WER for a same-language pair (English generated from English audio against the English track), and coverage.
-This is how the register work, the labels and the routes are measured from here on, across every language a
-reference exists for, rather than by one reader's sample. The number is comparative, not absolute: a higher
-chrF++ against the same human track is evidence that one arm is closer to it than another, not that a subtitle
-with different wording is wrong.
+**Against the film's own human tracks** (`mlsubgen refscore` and `mlsubgen regscore`): a release that carries
+thirty text tracks is thirty references. `refscore` scores the generated file for each language against the human
+track by chrF++ per minute of film (so that distributors cutting the same dialogue into different cues is not
+punished), WER for a same-language pair, and coverage. `regscore` asks the question chrF++ cannot: per line, does
+the generated subtitle show the same *register feature* as the human one — the Thai politeness particle and
+pronoun, the French *tu/vous*, the German *du/Sie*, the Korean and Japanese politeness level, the Hebrew
+second-person gender, the Vietnamese pronoun pair, the Slavic *ty/vy*? Both numbers are comparative, not
+absolute: a higher score against the same human track is evidence that one arm is closer to it than another, not
+that a subtitle with different wording is wrong.
+
+**The character work, measured** (2026-10-07: six 25-minute cuts of *Kindergarten Cop*, *A Few Good Men* and
+*Red Notice*, twelve languages, the 31B with the resolver — labels, sheet, hedge repair, title lookup — against
+the same model without it, weighted over the cuts):
+
+| register feature | human lines | without | with the resolver |
+|---|---|---|---|
+| Thai politeness particle (ครับ/ค่ะ) | 147 | 35 % | **57 %** |
+| Thai form of address | 538 | 67 % | **75 %** |
+| French *tu/vous* | 529 | 74 % | **77 %** |
+| Russian *ty/vy* | 273 | 60 % | **65 %** |
+| Japanese self-reference pronoun | 89 | 29 % | **35 %** |
+| Korean politeness level | 1,332 | 60 % | **62 %** |
+| Vietnamese pronoun pair | 656 | 77 % | **79 %** |
+| Czech *ty/vy* | 179 | 57 % | **59 %** |
+| German *du/Sie*, Hebrew gender, Japanese politeness, Spanish | | | within 2 points |
+| Polish *pan/pani* | 234 | 59 % | 51 % |
+| Greek *εσείς* | 262 | 58 % | 54 % |
+
+chrF++ moved by less than a point in every language, so the resolver changes particles and pronouns and nothing
+else. The two regressions are the renderer's informal-address rule reaching languages where translators keep the
+formal form longer; a calibration for Polish and Greek is in 0.6.0 and unmeasured. The lookup is what makes the
+sheet right: without it the same arm scored *below* the baseline on French (65 % against 77 %), because an
+unidentified character defaults to formal address. The 26B on the `16gb` split with the same resolver matches
+the 31B on chrF++ within a point everywhere and trails it on register (French 72 %, German 68 %, Thai address
+65 %), so a 12 GB card gets the same words and most of the register.
+
+**English from foreign-language subtitles** (the same cuts, their Italian tracks): transcribing the English audio
+scored 68–69 chrF++ against the human English; transcribing with the Italian track as the reconciler's evidence
+69–71; translating the Italian track back into English 51–66. Listening wins by eight to seventeen points, which is
+why a target that is the spoken language is always transcribed and a foreign track is kept as evidence.
 
 **Language detection** (`mlsubgen lidbench VIDEO`, scored against the film's forced subtitle track — a lower bound,
 since songs and untranslated lines are foreign speech it does not show):
@@ -315,8 +349,12 @@ gates' thresholds) is in `mlsubgen/config.py` and documented there.
 
 - Language detection on material that alternates languages quickly is the weakest link; `--source` forces the
   language, `mlsubgen scan` shows what the detector sees without running the ASR.
-- The six TranslateGemma-routed languages get no character sheet; Greek is withheld; the tiers above are one
-  reader's judgement on one episode and one film.
+- The six TranslateGemma-routed languages get no character sheet. The reading tiers are one reader's judgement on
+  one episode; the numbers are from three films and twelve languages.
+- The character work makes Polish and Greek address slightly *more* informal than their human translators would;
+  a calibration for both is in 0.6.0 and not yet measured.
+- The lookup is opt-in for privacy, and the character sheet is markedly better with it: enable it with
+  `--web-context auto` when the film's title can leave the machine.
 - The small profiles, their routes included, are measured on a 24 GB card limited to their splits, not on the cards
   they are for.
 - Diarization fragments feature-film casts and is off by default.
