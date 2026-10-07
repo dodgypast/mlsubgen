@@ -200,7 +200,7 @@ def cmd_languages(a: argparse.Namespace) -> int:
               + ", ".join(f"{config.LANG_NAMES[c]} ({config.WITHHELD_REASON.get(c, 'measured below shippable')})"
                           for c in sorted(config.UNSUPPORTED_TARGETS, key=lambda c: config.LANG_NAMES[c])))
     else:
-        print("nothing is withheld: every known language is offered as a target (2026-10-07), seven with known errors — see the README's tiers")
+        print("nothing is withheld: every known language is offered as a target (2026-10-07), eight with known errors — see the README's tiers")
     return 0
 
 
