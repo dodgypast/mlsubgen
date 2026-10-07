@@ -1559,7 +1559,7 @@ def cmd_refscore(a: argparse.Namespace) -> int:
     from . import refscore as rsc
     video, out = Path(a.video).expanduser(), Path(a.out).expanduser()
     langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
-    rows = rsc.refscore(video, out, langs, a.bin)
+    rows = rsc.refscore(video, out, langs, a.bin, include_forced=a.forced, assume_und=a.assume_und)
     if not rows:
         _log("nothing to score: no language has both a text track in the file and a generated .srt in --out"); return 1
     rsc.print_table(rows, f"{video.name} — generated files in {out} against the film's own tracks (bins of {a.bin:.0f}s)")
@@ -1582,11 +1582,9 @@ def cmd_regscore(a: argparse.Namespace) -> int:
     langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
     rows = []
     pr = probe(video)
-    for t in pr.subs:
-        if not t.is_text:
-            continue
-        code = code_for_tag(t.language) or t.language
-        if (langs and code not in langs) or code not in rg.FEATURES or re.search(r"sdh|forced|commentary", t.title or "", re.I):
+    from .refscore import reference_tracks
+    for t, code in reference_tracks(pr.subs, langs, include_forced=a.forced, assume_und=a.assume_und):
+        if code not in rg.FEATURES:
             continue
         hyp = out / f"{video.stem}.{code}.srt"
         if not hyp.is_file():
@@ -2379,6 +2377,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     _a = _rg.register_agreement(_r, _h, "fr")
     assert _a["pairs"] == 3 and _a["classes"]["tv"] == {"n": 2, "agree": 1, "absent": 0, "rate": 50.0, "absent_rate": 0.0}, _a
     assert _rg.register_agreement(_r, [], "fr")["pairs"] == 0 and _rg.features_of("anything", "sv") == {}
+    # which tracks are references (0.6.1): never SDH or commentary; forced only when asked; und as assumed
+    from .refscore import reference_tracks
+    _rt = [_ST(0, 2, "eng", "", "subrip", True, False, False), _ST(1, 3, "eng", "Forced", "subrip", True, True, False),
+           _ST(2, 4, "eng", "SDH", "subrip", True, True, False), _ST(3, 5, "und", "", "ass", True, False, False),
+           _ST(4, 6, "jpn", "", "hdmv_pgs_subtitle", False, False, False)]
+    assert [t.index for t, c in reference_tracks(_rt, None)] == [0]
+    assert [t.index for t, c in reference_tracks(_rt, None, include_forced=True)] == [0, 1]
+    assert [(t.index, c) for t, c in reference_tracks(_rt, None, assume_und="en")] == [(0, "en"), (3, "en")]
+    assert [t.index for t, c in reference_tracks(_rt, ["ja"])] == []
     # the reference scorer (0.5.7): per-minute bins, chrF++, WER, coverage — on two tiny cue sets
     from .refscore import score_pair, wer as _wer
     from .srt import SrtCue as _SrtCue
@@ -2611,11 +2618,14 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--lang", default=None, help="comma-separated codes to score (default: every language the film has a text track for)")
     rs.add_argument("--bin", type=float, default=60.0, help="bin size in seconds (default 60)")
     rs.add_argument("--json", default=None, help="also write the rows to this JSON file")
+    rs.add_argument("--forced", action="store_true", help="use forced tracks as references too (a forced English track is the human translation of a film's foreign stretches)")
+    rs.add_argument("--assume-und", default=None, dest="assume_und", metavar="LANG", help="treat an untagged (und) text track as this language")
     rs.set_defaults(fn=cmd_refscore)
     rg = sub.add_parser("regscore", help="register agreement of generated .srt files with the film's own human tracks: particles, tu/vous, politeness, gender — per feature")
     rg.add_argument("video"); rg.add_argument("--out", required=True, help="folder holding <stem>.<lang>.srt files to score")
     rg.add_argument("--lang", default=None, help="comma-separated codes (default: every language with a feature set and a text track)")
     rg.add_argument("--json", default=None)
+    rg.add_argument("--forced", action="store_true"); rg.add_argument("--assume-und", default=None, dest="assume_und", metavar="LANG")
     rg.set_defaults(fn=cmd_regscore)
     ln = sub.add_parser("languages", help="list the subtitle languages (codes for --target / --source)")
     ln.add_argument("--profile", default="auto", help="which hardware profile's offer and routes to show (auto = this card's)")

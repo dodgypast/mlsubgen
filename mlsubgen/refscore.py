@@ -79,18 +79,38 @@ def score_pair(ref_cues, hyp_cues, lang: str, size: float = 60.0) -> dict:
             "ref_cues": len(ref_cues), "hyp_cues": len(hyp_cues)}
 
 
-def refscore(video: Path, out_dir: Path, langs: list[str] | None = None, size: float = 60.0, tmp: Path | None = None) -> list[dict]:
+def reference_tracks(subs, langs: list[str] | None, include_forced: bool = False, assume_und: str | None = None) -> list[tuple]:
+    """(track, code) for the text tracks usable as references. SDH and commentary tracks never; forced tracks only
+    with include_forced (a forced track is the human translation of a film's foreign-language stretches, the
+    reference for foreign audio → English); an untagged track counts as assume_und when given (a fansub's `und`
+    ASS dialogue track)."""
+    out = []
+    for t in subs:
+        if not t.is_text:
+            continue
+        title = t.title or ""
+        if re.search(r"sdh|commentary|signs", title, re.I):
+            continue
+        is_forced = bool(getattr(t, "forced", False)) or bool(re.search(r"forced", title, re.I))
+        if is_forced and not include_forced:
+            continue
+        code = code_for_tag(t.language)
+        if not code and assume_und and (t.language or "und") in ("und", "", "mis", "zxx"):
+            code = assume_und
+        if not code:
+            continue
+        if langs and code not in langs:
+            continue
+        out.append((t, code))
+    return out
+
+
+def refscore(video: Path, out_dir: Path, langs: list[str] | None = None, size: float = 60.0, tmp: Path | None = None,
+             include_forced: bool = False, assume_und: str | None = None) -> list[dict]:
     pr = probe(video)
     tmp = tmp or out_dir
     rows = []
-    for t in pr.subs:
-        if not t.is_text:
-            continue
-        code = code_for_tag(t.language) or t.language
-        if langs and code not in langs:
-            continue
-        if re.search(r"sdh|forced|commentary", t.title or "", re.I):
-            continue
+    for t, code in reference_tracks(pr.subs, langs, include_forced, assume_und):
         hyp = out_dir / f"{video.stem}.{code}.srt"
         if not hyp.is_file():
             continue
