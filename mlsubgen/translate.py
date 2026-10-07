@@ -166,8 +166,15 @@ class LLMClient:
             }
             r = self._post("/api/chat", payload)
             content = (r.get("message") or {}).get("content", "") or ""
-            self.usage.prompt_tokens += int(r.get("prompt_eval_count") or 0)
+            pe = int(r.get("prompt_eval_count") or 0)
+            self.usage.prompt_tokens += pe
             self.usage.completion_tokens += int(r.get("eval_count") or 0)
+            # a prompt near the context window is the one failure Ollama hides (0.6.2): the front of the prompt —
+            # the CHARACTERS rules — would be what a truncation drops, so say so once per client
+            if pe and self.tr.num_ctx and pe > 0.9 * self.tr.num_ctx and not getattr(self, "_ctx_warned", False):
+                self._ctx_warned = True
+                _log(f"[llm] ⚠ a prompt reached {pe} of the {self.tr.num_ctx}-token context window ({self.tr.model}); "
+                     f"raise LLM_NUM_CTX or shorten --window before the sheet or the glossary is cut off")
         else:
             payload = {"model": self.tr.model, "messages": messages, "temperature": self.tr.temperature,
                        "max_tokens": max_tokens, "stream": False}
@@ -315,7 +322,10 @@ CHARACTERS_RULE = ("CHARACTERS lists who speaks in this film and how each of the
                    "own speech. Where a line starts with a voice tag like [S2] and CHARACTERS says which character that "
                    "voice is, that IS the speaker: do not re-guess it from the words. Otherwise work out who is speaking "
                    "from the dialogue and the CONTEXT. Then follow the sheet for that character and for the person they "
-                   "are addressing. Never hedge gender with slashes or brackets: pick the form the sheet gives.")
+                   "are addressing. Where the sheet says \"unknown\" for a pair or a character, or lists neither of the "
+                   "people in a line, translate that line as you would without a sheet — from the dialogue, with the "
+                   "register the scene itself shows — and do not default to formal address. Never hedge gender with "
+                   "slashes or brackets: pick the form the sheet gives, or the one the scene gives.")
 
 
 CROSS_RULE = ("EVIDENCE lines are human translations of the SAME subtitle lines into languages whose grammar marks "

@@ -257,11 +257,16 @@ the same model without it, weighted over the cuts):
 
 chrF++ moved by less than a point in every language, so the resolver changes particles and pronouns and nothing
 else. The two regressions are the renderer's informal-address rule reaching languages where translators keep the
-formal form longer; a calibration for Polish and Greek is in 0.6.0 and unmeasured. The lookup is what makes the
-sheet right: without it the same arm scored *below* the baseline on French (65 % against 77 %), because an
-unidentified character defaults to formal address. The 26B on the `16gb` split with the same resolver matches
-the 31B on chrF++ within a point everywhere and trails it on register (French 72 %, German 68 %, Thai address
-65 %), so a 12 GB card gets the same words and most of the register.
+formal form longer; a calibration for Polish and Greek in 0.6.0 recovered Polish on one cut and not the other,
+and Greek on neither. In this benchmark the lookup was crucial: without it the same arm scored *below* the
+baseline on French (65 % against 77 %), because an unidentified character was given formal address — which
+0.6.2 stops: a gap in the sheet now gives no rule at all, and such lines are translated as they would be without
+a sheet. A voice is mapped to a named character only when the sheet quotes a line that shows it; otherwise it
+stays an anonymous speaker tag. `regscore` pairs each human cue with the generated cue that overlaps it most in
+time, and scores only the pairs where the human line shows the feature. The 26B with the same resolver, measured
+on the `16gb`, `12gb` and `8gb` splits, matches the 31B on chrF++ within a point and holds its register on the
+two smaller splits (French 77 %, German 76 and 73, Korean 66 and 63, Thai particles 61), so a 12 GB or 8 GB card
+gets the same words and the same register on this material.
 
 **English from foreign-language subtitles** (the same cuts, their Italian tracks): transcribing the English audio
 scored 68–69 chrF++ against the human English; transcribing with the Italian track as the reconciler's evidence
@@ -276,6 +281,13 @@ since songs and untranslated lines are foreign speech it does not show):
 | Babel | 90 % | 80 % | 66 % | 0.3 s |
 | Inglourious Basterds | 97 % | 75 % | 57 % | 0.4 s |
 | Only God Forgives | 83 % | 92 % | 61 % | 1.1 s |
+
+**Speed, measured on whole films** (2026-10-07, a 24 GB card): the dual speech recognition runs at about a third
+of real time (*Babel*, 143 min, decoded in 32 min; *Red Notice*, 118 min, in 14 min), the reconciliation adds a
+few minutes, and each translated language takes about a quarter of the film's length (*Red Notice* into Thai: 17
+min). A two-hour film with English audio came out with English and Thai subtitles in 62 minutes end to end. The
+small profiles on a 25-minute cut: the `12gb` split 4 minutes a language, the `8gb` split 6, with chrF++ within a
+point of the 31B and register agreement equal to it (French 77 %, Thai particles 61 %, Korean 66 / 63 %).
 
 **Transcription and translation** (`mlsubgen bench VIDEO --clip … --reference REF.srt`, chrF++ against a fansub
 of a Shin-chan episode, Japanese audio → Thai): the 31B 31.0, the 26B 30.2, the 12B 29.0; the terminology pass
@@ -352,12 +364,17 @@ gates' thresholds) is in `mlsubgen/config.py` and documented there.
 - The six TranslateGemma-routed languages get no character sheet. The reading tiers are one reader's judgement on
   one episode; the numbers are from three films and twelve languages.
 - The character work makes Polish and Greek address slightly *more* informal than their human translators would;
-  a calibration for both is in 0.6.0 and not yet measured.
+  a calibration in 0.6.0 recovered Polish on one cut of two and Greek on neither, and 0.6.2's rule that a gap in
+  the sheet is not formal address has not been measured on them yet.
 - The lookup is opt-in for privacy, and the character sheet is markedly better with it: enable it with
   `--web-context auto` when the film's title can leave the machine.
 - The small profiles, their routes included, are measured on a 24 GB card limited to their splits, not on the cards
   they are for.
-- Diarization fragments feature-film casts and is off by default.
+- Full speaker-aware diarization on the audio path (cues cut at speaker changes, detection following voices) is
+  off by default because feature-film clustering can fragment a cast; the lighter `labels` mode, which only tags a
+  text track's cues for the character sheet, is the default.
+- The offloaded profiles were measured on a workstation card limited to their splits; a consumer card on fewer
+  PCIe lanes with DDR4 will be slower at the same split, by an amount only a real card can say.
 - Specialised vocabulary in low-resource languages (an insect, a tree, a snake) is where the translators err
   most; a user glossary of a film's twenty key nouns is the cure.
 - The web UI has HTTP Basic auth at most. NVIDIA only.

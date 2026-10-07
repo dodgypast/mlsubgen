@@ -148,12 +148,22 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
     # --source or --subs.
     if spoken and spoken in remaining and lang != spoken and not isinstance(src, Path) and not os.environ.get("MLSUBGEN_PREFER_TRACK"):
         # (MLSUBGEN_PREFER_TRACK=1 is a measurement override: translate the foreign track anyway, to compare)
+        # the evidence track is the most USEFUL foreign text track for a reconciler of this audio, not the first in
+        # stream order (0.6.2: a 32-track release handed the reconciler Japanese because it came first)
+        best, best_lang = src, lang
+        for t in pr.subs:
+            code = code_for_tag(t.language) or ""
+            if not t.is_text or not code or code == spoken or re.search(r"sdh|forced|commentary|signs", t.title or "", re.I):
+                continue
+            if config.EVIDENCE_RANK.get(code, 99) < config.EVIDENCE_RANK.get(best_lang, 99):
+                best, best_lang = t, code
         data.setdefault("video", str(job.video))
-        data["evidence_track"] = {"track": src.index, "codec": src.codec, "language": lang, "title": src.title,
+        data["evidence_track"] = {"track": best.index, "codec": best.codec, "language": best_lang, "title": best.title,
                                   "why": f"a {config.LANG_NAMES.get(spoken, spoken)} target from {config.LANG_NAMES.get(spoken, spoken)} audio: the audio is the original"}
         work.save(job.work_file, data)
         _log(f"[subs] {name} track s:{src.index} is a translation of the {config.LANG_NAMES.get(spoken, spoken)} audio, and "
-             f"{config.LANG_NAMES.get(spoken, spoken)} is a target — listening to the original; the track is kept as evidence")
+             f"{config.LANG_NAMES.get(spoken, spoken)} is a target — listening to the original; "
+             f"{config.LANG_NAMES.get(best_lang, best_lang)} track s:{best.index} is kept as evidence")
         return satisfied, None
     if isinstance(src, Path):
         cues = cues_from_track(src, lang)
@@ -746,6 +756,20 @@ def stage_terms(job: Job, data: dict, key: str, cues: list[Cue], target: str, po
         entry["renderings"][target] = rendered
         work.save(job.work_file, data)
     glossary = tm.build_glossary(rendered, job.glossary)
+    # a series carries its rendered names forward (0.6.2): the first episode's spelling wins in every later one;
+    # this episode's new names are added for the next
+    skey = (data.get("series") or {}).get("key")
+    if skey:
+        from . import series as _series
+        sstate = _series.load(skey)
+        carried = _series.glossary_for(sstate, target)
+        user_gl = job.glossary if isinstance(job.glossary, dict) else {}
+        for k, v in carried.items():
+            if k not in user_gl:                        # the user's own glossary still wins
+                glossary[k] = v
+        _series.save(_series.merge_glossary(sstate, target, {k: v for k, v in rendered.items() if k not in carried}))
+        if carried:
+            _log(f"[series] {skey}: {len(carried)} rendered name(s) carried into the {config.LANG_NAMES.get(target, target)} glossary")
     # the title in the target language from the lookup (0.5.8), when it is on and found: a fact, ahead of any rendering
     mc = data.get("media_context") or {}
     if mc.get("used"):
@@ -840,10 +864,28 @@ def stage_cross_evidence(job: Job, data: dict, key: str, cues: list[Cue], target
 
 
 # ── stage 1e: the title lookup (0.5.8, opt-in) ─────────────────────────────────────────────────────────────
+def stage_series(job: Job, data: dict) -> dict:
+    """The series this file belongs to, from its name alone (0.6.2, local, no network): the carried characters
+    and rendered names of earlier episodes, offered to this episode's sheet and glossary. {} for a film."""
+    from . import lookup, series
+    if data.get("series") is not None:
+        return data["series"]
+    key = series.key_for(lookup.identify(job.video))
+    if not key:
+        data["series"] = {}
+        return {}
+    state = series.load(key)
+    data["series"] = {"key": key, "episodes_before": len(state.get("episodes", [])), "characters_before": len(state.get("characters", []))}
+    if state.get("characters"):
+        _log(f"[series] {key}: {len(state['characters'])} character(s) carried from {len(state.get('episodes', []))} earlier episode(s)")
+    return data["series"]
+
+
 def stage_lookup(job: Job, data: dict) -> dict:
     """What is publicly known about the title, once per file, kept in the work file with every query recorded.
     Off unless --web-context auto. The terms pass reads the localised title from it; the sheet reads the cast."""
     from . import lookup
+    stage_series(job, data)
     if not lookup.enabled(job.web_context):
         return {}
     if data.get("media_context"):
@@ -888,10 +930,18 @@ def stage_characters(job: Job, data: dict, key: str, cues: list[Cue], target: st
     t0 = time.time()
     if entry.get("version") != config.CHARACTERS_VERSION or "sheet" not in entry or (tagged and "voices" not in entry):
         facts = lookup.facts_text(data.get("media_context") or {})       # 0.5.8: the title's public facts, as priors
+        from . import series as _series
+        skey = (data.get("series") or {}).get("key")
+        sstate = _series.load(skey) if skey else None
+        if sstate and sstate.get("characters"):                           # 0.6.2: earlier episodes' characters, as priors
+            facts = (facts + "\n\n" if facts else "") + _series.facts_text(sstate)
         sheet, voices = ch.build_sheet(client, texts, src, job.genre, tagged=tagged, facts=facts)
         entry.update({"version": config.CHARACTERS_VERSION, "source": src, "sheet": sheet, "voices": voices,
                       "renderings": {}, "model": client.tr.model, "facts_used": bool(facts)})
         work.save(job.work_file, data)
+        if sstate is not None and sheet:
+            _series.save(_series.merge_sheet(sstate, sheet, job.video.name))
+            _log(f"[series] {skey}: sheet merged — {len(sstate['characters'])} character(s) carried for the next episode")
     rules = entry["renderings"].get(target)
     if rules is None:
         rules = ch.render_sheet(client, entry["sheet"], src, target, job.genre, voices=entry.get("voices") or {})

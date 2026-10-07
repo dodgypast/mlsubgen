@@ -62,6 +62,26 @@ def wer(ref: list[str], hyp: list[str]) -> float:
     return d[len(hyp)] / len(ref)
 
 
+def score_pairs(ref_cues, hyp_cues, lang: str) -> dict:
+    """Cue-level scoring (0.6.2): each reference cue is paired with the generated cue that overlaps it most, and
+    chrF++ and WER are computed over the paired texts only. For a forced track, which carries only a film's
+    foreign-language lines, the per-minute bins are diluted by the generated cues for the English lines in the
+    same minute; pairing scores only what the reference has."""
+    from sacrebleu.metrics import CHRF
+    from .register import match_cues
+    chrf = CHRF(word_order=2)
+    pairs = match_cues(ref_cues, hyp_cues)
+    def txt(c):
+        t = getattr(c, "text", None)
+        return t if t is not None else getattr(c, "ja", "")
+    refs = [txt(r).replace("\n", " ") for r, _ in pairs]; hyps = [txt(h).replace("\n", " ") for _, h in pairs]
+    score = chrf.corpus_score(hyps, [refs]).score if pairs else None
+    w = [wer(_norm_words(r), _norm_words(h)) for r, h in zip(refs, hyps)]
+    return {"lang": lang, "pairs": len(pairs), "ref_cues": len(ref_cues), "hyp_cues": len(hyp_cues),
+            "chrf": round(score, 1) if score is not None else None, "wer": round(100 * sum(w) / len(w), 1) if w else None,
+            "coverage": round(len(pairs) / len(ref_cues), 2) if ref_cues else None, "bins_ref": len(ref_cues), "bins_hyp": len(hyp_cues), "bins_both": len(pairs)}
+
+
 def score_pair(ref_cues, hyp_cues, lang: str, size: float = 60.0) -> dict:
     from sacrebleu.metrics import CHRF
     chrf = CHRF(word_order=2)
@@ -106,7 +126,7 @@ def reference_tracks(subs, langs: list[str] | None, include_forced: bool = False
 
 
 def refscore(video: Path, out_dir: Path, langs: list[str] | None = None, size: float = 60.0, tmp: Path | None = None,
-             include_forced: bool = False, assume_und: str | None = None) -> list[dict]:
+             include_forced: bool = False, assume_und: str | None = None, pairs: bool = False) -> list[dict]:
     pr = probe(video)
     tmp = tmp or out_dir
     rows = []
@@ -122,7 +142,7 @@ def refscore(video: Path, out_dir: Path, langs: list[str] | None = None, size: f
             tmp_srt.unlink(missing_ok=True)
         if len(ref) < 20:
             continue
-        row = score_pair(ref, read_srt(hyp), code, size)
+        row = score_pairs(ref, read_srt(hyp), code) if pairs else score_pair(ref, read_srt(hyp), code, size)
         row["track"] = t.index
         rows.append(row)
     return rows

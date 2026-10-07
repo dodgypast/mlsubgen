@@ -1559,7 +1559,7 @@ def cmd_refscore(a: argparse.Namespace) -> int:
     from . import refscore as rsc
     video, out = Path(a.video).expanduser(), Path(a.out).expanduser()
     langs = [x.strip() for x in a.lang.split(",")] if a.lang else None
-    rows = rsc.refscore(video, out, langs, a.bin, include_forced=a.forced, assume_und=a.assume_und)
+    rows = rsc.refscore(video, out, langs, a.bin, include_forced=a.forced, assume_und=a.assume_und, pairs=a.pairs)
     if not rows:
         _log("nothing to score: no language has both a text track in the file and a generated .srt in --out"); return 1
     rsc.print_table(rows, f"{video.name} — generated files in {out} against the film's own tracks (bins of {a.bin:.0f}s)")
@@ -1652,6 +1652,9 @@ def cmd_why(a: argparse.Namespace) -> int:
     for k, g in gate.items():
         if k != f"s:{src.get('ocr_track')}":
             print(f"  OCR {k} ({config.LANG_NAMES.get(g.get('language'), g.get('language'))}): {'used' if g.get('usable') else 'rejected'} — {g.get('why')}")
+    sr = data.get("series")
+    if sr and sr.get("key"):
+        print(f"  series: {sr['key']} — {sr.get('characters_before', 0)} character(s) carried from {sr.get('episodes_before', 0)} earlier episode(s) into this one's sheet and glossary")
     mc = data.get("media_context")
     if mc:
         idn = mc.get("identity") or {}
@@ -2278,6 +2281,46 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     en_lines = ["Shin-chan went to Kasukabe.", "Misae and Hiroshi laughed.", "Then Misae left. Kasukabe is quiet.", "Hiroshi works."]
     he = _tm.heuristic_candidates(en_lines, "en")
     assert he.get("Misae") == 1 and he.get("Kasukabe") == 1 and he.get("Hiroshi") == 1 and "Then" not in he and "Shin" not in he, he
+    # the series context (0.6.2): characters and rendered names carried between episodes, on a temporary state
+    from . import series as _sr
+    _st = {"series": "x", "characters": [], "glossary": {}, "episodes": []}
+    _sr.merge_sheet(_st, [{"name": "Shin-chan", "aliases": ["Shinnosuke"], "gender": "m", "age": "child", "role": "the boy", "relations": [{"to": "Misae", "relation": "son"}]},
+                          {"name": "Misae", "gender": "?", "age": "adult"}], "ep64")
+    _sr.merge_sheet(_st, [{"name": "Shinnosuke", "aliases": ["Shin"], "gender": "m", "age": "child"}, {"name": "Misae", "gender": "f", "age": "adult", "role": "the mother"},
+                          {"name": "Hiroshi", "gender": "m", "age": "adult"}], "ep65")
+    assert [c["name"] for c in _st["characters"]] == ["Shin-chan", "Misae", "Hiroshi"], "an alias merges into the known name; a new name is added"
+    assert "Shin" in _st["characters"][0]["aliases"] and _st["characters"][1]["gender"] == "f" and _st["episodes"] == ["ep64", "ep65"]
+    _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ"}); _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจังงง", "Hiroshi": "ฮิโรชิ"})
+    assert _sr.glossary_for(_st, "th") == {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ", "Hiroshi": "ฮิโรชิ"}, "the first rendering wins"
+    assert "Recurring characters" in _sr.facts_text(_st) and "Shin-chan (m, child, the boy); son of Misae; also called Shinnosuke, Shin" in _sr.facts_text(_st)
+    assert _sr.key_for({"kind": "episode", "series": "Crayon Shin-chan"}) == "crayon-shin-chan" and _sr.key_for({"kind": "film", "title": "x"}) is None
+    # cue-pair scoring (0.6.2): only what the reference has is scored
+    from .refscore import score_pairs
+    from .srt import SrtCue as _SrtCue
+    _r = [_SrtCue(10.0, 12.0, "Where are you going?"), _SrtCue(50.0, 52.0, "Nowhere.")]
+    _h = [_SrtCue(0.0, 2.0, "Good morning."), _SrtCue(10.2, 12.1, "Where are you going?"), _SrtCue(20.0, 22.0, "Lovely day."), _SrtCue(50.0, 52.0, "Nowhere.")]
+    _p = score_pairs(_r, _h, "en")
+    assert _p["pairs"] == 2 and _p["coverage"] == 1.0 and _p["wer"] == 0.0 and _p["chrf"] and _p["chrf"] > 95, _p
+    # dirty release names (0.6.2): what the identifier makes of them, and that a weak name gets low confidence
+    from . import lookup as _lk
+    from . import characters as _ch
+    class _Fake:
+        def __init__(self, out): self.out = out
+        def chat(self, system, user, **kw): return self.out
+    for _n, _want in (("ShinChan.E64.1080p.WEB-DL.x264-GRP.mkv", None), ("Movie.Title.2022.REPACK.mkv", ("Movie Title", 2022)),
+                      ("The.Office.US.S03E12.720p.HDTV.x264-CTU.mkv", ("The Office US", 3, 12)), ("[Judas] Kaguya-sama - S01E05.mkv", ("Kaguya-sama", 1, 5)),
+                      ("2001.A.Space.Odyssey.1968.2160p.mkv", ("2001 A Space Odyssey", 1968)), ("home video.mkv", None)):
+        _i = _lk.identify(Path("/x") / _n)
+        if _want is None:
+            assert _i["confidence"] < 0.6, (_n, _i)
+        elif len(_want) == 2:
+            assert _i.get("title") == _want[0] and _i.get("year") == _want[1], (_n, _i)
+        else:
+            assert _i.get("series") == _want[0] and _i.get("season") == _want[1] and _i.get("episode") == _want[2], (_n, _i)
+    # a malformed sheet answer degrades to no sheet, never a crash (0.6.2)
+    for _bad in ("Here is the sheet:\n{\"characters\": [{\"name\": \"Will\", \"gender\":", "no json at all", "", "[{\"name\": 7}]", "{\"characters\": \"not a list\"}"):
+        _s, _v = _ch.build_sheet(_Fake(_bad), ["x"], "en", "a film", tagged=True, facts="some facts")
+        assert _s == [] and _v == {}, (_bad, _s, _v)
     # media identification from file names (0.5.8): no network in the selftest, only the parse and the opt-in default
     from . import lookup as _lk
     _i = _lk.identify(Path("/x/Definitely.Maybe.2008.1080p.BluRay.x264-EbP.mkv"))
@@ -2620,6 +2663,7 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--json", default=None, help="also write the rows to this JSON file")
     rs.add_argument("--forced", action="store_true", help="use forced tracks as references too (a forced English track is the human translation of a film's foreign stretches)")
     rs.add_argument("--assume-und", default=None, dest="assume_und", metavar="LANG", help="treat an untagged (und) text track as this language")
+    rs.add_argument("--pairs", action="store_true", help="score cue pairs (each reference cue against the generated cue overlapping it most) instead of per-minute bins — for a forced track, which carries only a film's foreign lines")
     rs.set_defaults(fn=cmd_refscore)
     rg = sub.add_parser("regscore", help="register agreement of generated .srt files with the film's own human tracks: particles, tu/vous, politeness, gender — per feature")
     rg.add_argument("video"); rg.add_argument("--out", required=True, help="folder holding <stem>.<lang>.srt files to score")

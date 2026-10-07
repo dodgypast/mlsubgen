@@ -61,6 +61,8 @@ def identify(video: Path) -> dict:
     m = re.match(r"^\[[^\]]+\]\s*(.+?)\s*-\s*(\d{1,4})\b", name)
     if m:
         info.update(series=m.group(1).strip(), episode=int(m.group(2)), kind="episode")
+    if "series" not in info:
+        name = re.sub(r"^\[[^\]]+\]\s*", "", name)      # a leading [Group] tag that is not the fansub pattern above
     # Series.S01E02.Title… / Series S01E02
     m = re.search(r"^(.*?)[\s._-]+S(\d{1,2})E(\d{1,3})\b", name, re.I)
     if m and "series" not in info:
@@ -114,14 +116,30 @@ def wikipedia(info: dict, targets: list[str], log: list[dict]) -> dict:
         s = _json("https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(page.replace(" ", "_")))
         out["summary"] = (s.get("extract") or "")[:1200]
         out["description"] = s.get("description", "")
-        # the cast section as plain text: "Actor as Character"
+        # the cast section as plain text: "Actor as Character" — or, for an anime or a novel adaptation, a
+        # "Characters" section whose list items start with the character's name (0.6.2)
         sec = _json("https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({"action": "parse", "page": page, "prop": "sections", "format": "json"}))
-        idx = next((x["index"] for x in sec["parse"]["sections"] if re.search(r"^cast|characters|voice cast", x["line"], re.I)), None)
-        if idx:
-            html = _json("https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({"action": "parse", "page": page, "section": idx, "prop": "text", "format": "json"}))["parse"]["text"]["*"]
-            text = re.sub(r"<[^>]+>", "", html)
-            cast = [m.strip() for m in re.findall(r"([^\n]{3,80}? as [^\n]{2,120})", text)]
-            out["cast"] = cast[:25]
+        cast: list[str] = []
+        for x in sec["parse"]["sections"]:
+            if not re.search(r"^cast|^characters|main characters|voice cast|^voices", x["line"], re.I):
+                continue
+            html = _json("https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({"action": "parse", "page": page, "section": x["index"], "prop": "text", "format": "json"}))["parse"]["text"]["*"]
+            items = [re.sub(r"<[^>]+>", "", li) for li in re.findall(r"<li[^>]*>(.*?)</li>", html, re.S)]
+            for it in items:
+                it = re.sub(r"\[\d+\]", "", it).replace("\n", " ").strip()
+                m = re.match(r"(.{3,80}?) as (.{2,120})$", it)
+                if m:
+                    cast.append(f"{m.group(1).strip()} as {m.group(2).strip()}"[:160]); continue
+                m = re.match(r"([^(:—–\-]{2,60}?)\s*(?:\(([^)]{0,80})\))?\s*[:—–\-]\s*(.{10,})", it)
+                if m:                                              # "Shinnosuke Nohara (野原 しんのすけ) — a five-year-old …"
+                    cast.append(f"{m.group(1).strip()}" + (f" ({m.group(2).strip()})" if m.group(2) else "") + f": {m.group(3).strip()[:120]}")
+            if cast:
+                break
+        out["cast"] = cast[:25]
+        # the year: a match of the right kind but the wrong year (a remake, a same-titled film) would poison the
+        # sheet; the description or summary usually carries one
+        m = re.search(r"\b((?:19|20)\d{2})\b", (out.get("description") or "") + " " + out["summary"][:200])
+        out["year"] = int(m.group(1)) if m else None
         # localised titles
         ll = _json("https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode({"action": "query", "titles": page, "prop": "langlinks", "lllimit": 200, "format": "json"}))
         pages = list(ll["query"]["pages"].values())
@@ -210,6 +228,9 @@ def media_context(video: Path, targets: list[str]) -> dict:
     desc = (wp.get("description") or "").lower()
     if used and desc and not re.search(r"film|movie|series|anime|television|tv|show|documentary", desc):
         used = False
+    wrong_year = bool(used and info.get("year") and wp.get("year") and abs(int(info["year"]) - int(wp["year"])) > 1)
+    if wrong_year:                                            # the right kind, the wrong year: a remake or a namesake
+        used = False
     results: list[dict] = []
     if used and (not wp.get("cast") or len(wp.get("cast", [])) < 3):
         q = f"{name} {info.get('year', '')} characters cast relationships".strip()
@@ -218,7 +239,8 @@ def media_context(video: Path, targets: list[str]) -> dict:
             results += brave(q, log)
     ctx = {"identity": info, "used": used, "wikipedia": wp, "results": results, "queries": log,
            "gathered": time.strftime("%Y-%m-%d %H:%M"), "cached": False,
-           "why": "" if used else ("no Wikipedia match" if not wp.get("page") else f"match of the wrong kind ({desc})" if desc else "low identification confidence")}
+           "why": "" if used else ("no Wikipedia match" if not wp.get("page") else f"match of the wrong year ({wp.get('year')} for a {info.get('year')} file)" if wrong_year
+                                   else f"match of the wrong kind ({desc})" if desc else "low identification confidence")}
     try:
         f.write_text(json.dumps(ctx, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError:

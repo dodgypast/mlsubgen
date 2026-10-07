@@ -76,7 +76,10 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "two adults who are peers, rivals, partners or friends the casual pair of their sexes (Vietnamese "
                  "cậu/tớ or anh/em by age, mày/tao when rough; Thai นาย/ฉัน between men, เธอ/ฉัน otherwise, แก/ข้า "
                  "when rough); keep the polite forms (tôi and anh/chị with ạ; คุณ with ผม/ดิฉัน and ครับ/ค่ะ) for "
-                 "strangers, officials, customers and superiors. Two calibrations: Polish keeps pan / pani between adults "
+                 "strangers, officials, customers and superiors. UNKNOWN IS AN ANSWER: for a pair whose relationship or "
+                 "relative standing the sheet does not give, and for a character whose gender or age is \"?\" or "
+                 "\"unknown\", write \"unknown — decide from the dialogue\" instead of a form; never turn a gap in the "
+                 "sheet into formal address or a guessed gender. Two calibrations: Polish keeps pan / pani between adults "
                  "who are not family or close friends, including long-standing colleagues, far longer than French keeps "
                  "vous; Greek similarly keeps εσείς between adult acquaintances and in any professional setting. Short "
                  "lines, no explanations, no JSON.")
@@ -124,9 +127,9 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
     voices_raw = data.get("voices") if isinstance(data, dict) else {}
     sheet = []
     for d in chars if isinstance(chars, list) else []:
-        if not isinstance(d, dict) or not d.get("name"):
+        if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"].strip():
             continue
-        if re.fullmatch(r"\[?S\d{1,2}\]?", str(d.get("name")).strip()):      # a voice tag is not a name (night one, 2026-10-05)
+        if re.fullmatch(r"\[?S\d{1,2}\]?", d["name"].strip()):      # a voice tag is not a name (night one, 2026-10-05)
             continue
         sheet.append({"name": str(d.get("name"))[:40],
                       "aliases": [str(a)[:40] for a in (d.get("aliases") or []) if isinstance(a, str)][:6],
