@@ -226,7 +226,17 @@ def media_context(video: Path, targets: list[str]) -> dict:
     used = bool(wp.get("page")) and info["confidence"] >= 0.6
     # the kind must match: a film name that hits a novel or a band is not this film
     desc = (wp.get("description") or "").lower()
-    if used and desc and not re.search(r"film|movie|series|anime|television|tv|show|documentary", desc):
+    if used and desc and not re.search(r"film|movie|series|anime|animated|television|tv|show|sitcom|documentary|drama|comedy|cartoon|miniseries|special", desc):
+        used = False
+    # the page must be ABOUT the title: Wikipedia's search answers anything with something ("Movie.Title.2022" came
+    # back as "Pearl (2022 film)" on 2026-10-08), so the title's own words must appear in the page's name
+    page_title = re.sub(r"\s*\([^)]*\)\s*$", "", wp.get("page") or "").lower()
+    asked = re.sub(r"[^a-z0-9 ]", " ", (info.get("title") or info.get("series") or "").lower())
+    words = [w for w in asked.split() if len(w) > 2 and w not in ("the", "and", "for", "with", "from", "of", "a", "an")]
+    page_words = set(re.sub(r"[^a-z0-9 ]", " ", page_title).split())
+    overlap = sum(1 for w in words if w in page_words) / len(words) if words else 0.0
+    wrong_title = bool(used and words and overlap < 0.6)
+    if wrong_title:
         used = False
     wrong_year = bool(used and info.get("year") and wp.get("year") and abs(int(info["year"]) - int(wp["year"])) > 1)
     if wrong_year:                                            # the right kind, the wrong year: a remake or a namesake
@@ -240,6 +250,7 @@ def media_context(video: Path, targets: list[str]) -> dict:
     ctx = {"identity": info, "used": used, "wikipedia": wp, "results": results, "queries": log,
            "gathered": time.strftime("%Y-%m-%d %H:%M"), "cached": False,
            "why": "" if used else ("no Wikipedia match" if not wp.get("page") else f"match of the wrong year ({wp.get('year')} for a {info.get('year')} file)" if wrong_year
+                                   else f"match of another title ({wp.get('page')} for {info.get('title') or info.get('series')!r})" if wrong_title
                                    else f"match of the wrong kind ({desc})" if desc else "low identification confidence")}
     try:
         f.write_text(json.dumps(ctx, ensure_ascii=False, indent=1), encoding="utf-8")

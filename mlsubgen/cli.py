@@ -2317,6 +2317,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             assert _i.get("title") == _want[0] and _i.get("year") == _want[1], (_n, _i)
         else:
             assert _i.get("series") == _want[0] and _i.get("season") == _want[1] and _i.get("episode") == _want[2], (_n, _i)
+    # the reconciler's evidence track is the closest language to the audio, not the first track (0.6.2.2)
+    assert config.RECONCILE_RANK["nl"] < config.RECONCILE_RANK["ja"] and config.RECONCILE_RANK["es"] < config.RECONCILE_RANK["he"]
     # a malformed sheet answer degrades to no sheet, never a crash (0.6.2)
     for _bad in ("Here is the sheet:\n{\"characters\": [{\"name\": \"Will\", \"gender\":", "no json at all", "", "[{\"name\": 7}]", "{\"characters\": \"not a list\"}"):
         _s, _v = _ch.build_sheet(_Fake(_bad), ["x"], "en", "a film", tagged=True, facts="some facts")

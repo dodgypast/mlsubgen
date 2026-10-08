@@ -155,7 +155,7 @@ def stage_subs(job: Job, data: dict, mode: str, targets: list[str]) -> tuple[lis
             code = code_for_tag(t.language) or ""
             if not t.is_text or not code or code == spoken or re.search(r"sdh|forced|commentary|signs", t.title or "", re.I):
                 continue
-            if config.EVIDENCE_RANK.get(code, 99) < config.EVIDENCE_RANK.get(best_lang, 99):
+            if config.RECONCILE_RANK.get(code, 99) < config.RECONCILE_RANK.get(best_lang, 99):
                 best, best_lang = t, code
         data.setdefault("video", str(job.video))
         data["evidence_track"] = {"track": best.index, "codec": best.codec, "language": best_lang, "title": best.title,

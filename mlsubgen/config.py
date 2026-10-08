@@ -419,6 +419,14 @@ TARGET_NEEDS: dict[str, set[str]] = {
 }
 # "politeness" (Korean/Japanese levels) and "formality" (tu/vous) are the same question asked by different grammars
 EVIDENCE_EQUIV = {"politeness": {"politeness", "formality"}, "formality": {"formality", "politeness"}, "relationship": {"relationship", "formality", "politeness"}}
+# For the RECONCILER's evidence track (a foreign text track beside audio in the target language, 0.5.6) the useful
+# language is the one closest to the spoken one for a model reading both — not the one that marks gender. The
+# 2026-10-08 whole-film run reused the register ranking and handed an English reconciler the Hebrew track.
+RECONCILE_RANK: dict[str, int] = {
+    "en": 0, "nl": 1, "de": 2, "es": 3, "fr": 4, "it": 5, "pt": 6, "sv": 7, "da": 8, "no": 9, "ro": 10, "pl": 11, "cs": 12,
+    "ru": 13, "uk": 14, "hr": 15, "hu": 16, "fi": 17, "tr": 18, "id": 19, "ms": 20, "el": 21, "ja": 22, "ko": 23, "zh": 24,
+    "he": 25, "ar": 26, "th": 27, "vi": 28, "hi": 29,
+}
 CROSS_EVIDENCE_MAX = 2         # tracks per target
 CROSS_EVIDENCE_VERSION = 2     # part of the cache key (2: ranked picker)
 # How well the translator reads the marking (2026-10-05): the first picker took the file's track order and got
