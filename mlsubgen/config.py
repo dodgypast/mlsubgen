@@ -431,7 +431,8 @@ EVIDENCE_RANK: dict[str, int] = {
 }
 
 # ── The character sheet (0.5.1): who speaks, and how they address each other in the target ──────────────────
-CHARACTERS_VERSION = 8         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
+CHARACTERS_VERSION = 9         # part of the cache: bump when the prompts change (2: voices, evidence, aliases merged, unknown;
+                               #  9: colleagues and acquaintances left to the dialogue — the night of 10-07/08 (Spanish, Greek, Polish);
                                #  8: unknown is an answer — a gap in the sheet is never formal address (2026-10-07 review);
                                #  7: Polish and Greek keep the formal form longer — the six-cut measurement of 2026-10-07;
                                #  6: kin-term pairs by relationship — the Vietnamese and Thai diagnoses of 2026-10-06;

@@ -60,7 +60,9 @@ def facts_text(state: dict) -> str:
         rel = "; ".join(f"{r.get('relation')} of {r.get('to')}" for r in (c.get("relations") or [])[:3] if r.get("to"))
         al = ", ".join(c.get("aliases") or [])
         lines.append(f"{c['name']} ({', '.join(bits)})" + (f"; {rel}" if rel else "") + (f"; also called {al}" if al else ""))
-    return "Recurring characters of this series, from earlier episodes (keep their names and genders; add what this episode shows):\n" + "\n".join(lines)
+    return ("Recurring characters of this series, from earlier episodes. Use these names SPELT EXACTLY AS GIVEN here "
+            "(Latin letters, not the source script) for anyone who is one of them, keep their genders, and add only "
+            "what this episode shows:\n" + "\n".join(lines))
 
 
 def merge_sheet(state: dict, sheet: list[dict], episode: str) -> dict:

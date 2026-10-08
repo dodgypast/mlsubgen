@@ -2292,7 +2292,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     assert "Shin" in _st["characters"][0]["aliases"] and _st["characters"][1]["gender"] == "f" and _st["episodes"] == ["ep64", "ep65"]
     _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ"}); _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจังงง", "Hiroshi": "ฮิโรชิ"})
     assert _sr.glossary_for(_st, "th") == {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ", "Hiroshi": "ฮิโรชิ"}, "the first rendering wins"
-    assert "Recurring characters" in _sr.facts_text(_st) and "Shin-chan (m, child, the boy); son of Misae; also called Shinnosuke, Shin" in _sr.facts_text(_st)
+    assert "SPELT EXACTLY AS GIVEN" in _sr.facts_text(_st) and "Shin-chan (m, child, the boy); son of Misae; also called Shinnosuke, Shin" in _sr.facts_text(_st)
     assert _sr.key_for({"kind": "episode", "series": "Crayon Shin-chan"}) == "crayon-shin-chan" and _sr.key_for({"kind": "film", "title": "x"}) is None
     # cue-pair scoring (0.6.2): only what the reference has is scored
     from .refscore import score_pairs

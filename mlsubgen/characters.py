@@ -64,11 +64,12 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "particles/verb forms that go with it), and the grammatical gender to use for their own speech where "
                  "{target} marks it. Be specific to {target}; if {target} makes no such distinctions, say so in one "
                  "line and give only the genders. Where {target} distinguishes an informal and a formal address (tu/vous, "
-                 "du/Sie, 반말/존댓말, plain/polite forms): friends, partners, spouses, siblings, parents and children, "
-                 "and colleagues who know each other well take the INFORMAL form; strangers, a superior addressed by a "
-                 "subordinate, officials, a court, a customer take the FORMAL; a character the sheet lists with a "
-                 "relation \"friend\" or \"partner\" or \"colleague\" and status \"equal\" is informal unless the setting "
-                 "is official. Where {target} addresses people by kin terms or role terms (Thai, Vietnamese, Burmese, "
+                 "du/Sie, 반말/존댓말, plain/polite forms): friends, lovers, spouses, siblings, parents and children "
+                 "take the INFORMAL form; strangers, a superior addressed by a subordinate, officials, a court, a "
+                 "customer take the FORMAL; for COLLEAGUES, partners at work and acquaintances write \"unknown — "
+                 "decide from the dialogue\" rather than a form: languages differ on them (German and Czech "
+                 "colleagues go informal; Spanish, Greek and Polish ones stay formal far longer) and the scene shows "
+                 "which. Where {target} addresses people by kin terms or role terms (Thai, Vietnamese, Burmese, "
                  "Khmer, Indonesian, Malay, Tagalog, Korean kin terms), choose each pair's OWN terms by relationship and "
                  "relative age, never a polite default: a teacher and a pupil take the school pair (Vietnamese thầy/cô "
                  "and em; Thai ครู and หนู or เธอ), a parent and a child the family pair (bố/mẹ and con; พ่อ/แม่ and "
@@ -79,10 +80,7 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "strangers, officials, customers and superiors. UNKNOWN IS AN ANSWER: for a pair whose relationship or "
                  "relative standing the sheet does not give, and for a character whose gender or age is \"?\" or "
                  "\"unknown\", write \"unknown — decide from the dialogue\" instead of a form; never turn a gap in the "
-                 "sheet into formal address or a guessed gender. Two calibrations: Polish keeps pan / pani between adults "
-                 "who are not family or close friends, including long-standing colleagues, far longer than French keeps "
-                 "vous; Greek similarly keeps εσείς between adult acquaintances and in any professional setting. Short "
-                 "lines, no explanations, no JSON.")
+                 "sheet into formal address or a guessed gender. Short lines, no explanations, no JSON.")
 
 
 def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = False, facts: str = "") -> tuple[list[dict], dict[str, str]]:
