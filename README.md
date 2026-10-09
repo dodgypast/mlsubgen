@@ -141,6 +141,7 @@ interrupted run resumes from the work files; a skipped file remembers its verdic
 | embedded subs | a text track in a target language → that target is done; any other full text track (the spoken language's first; ASS cleaned of tags, karaoke and comments; an untagged track has its language read from its own words) → the transcript, no ASR. A **bitmap** (PGS) track is read through OCR — below |
 | probe · audio | `ffprobe` picks the audio track (tag, title, default; `--audio-track N` overrides); `ffmpeg` → 16 kHz mono wav |
 | speakers | *optional, `--speakers`*: speaker turns from sherpa-onnx on the CPU — below. **Labels** (0.5.4): when the transcript came from a text track and a target needs to know who speaks, the diarizer runs on the audio anyway (nothing is transcribed) and each cue takes the voice that covers it — a fact for the character sheet, which then says which voice is which character |
+| series | a file identified as an episode (from its name, locally, no network) carries its series' characters and rendered names forward: the sheet of episode 64 is offered to episode 65 as known characters, the first spelling of a name wins in every later glossary, and each episode adds what it learns (`context/series/<slug>.json`; `why` says what was carried). The sheet records each name in the dialogue's own script too, so an episode that calls the boy しんのすけ is matched to the one that said Shin-chan |
 | lookup | *opt-in, `--web-context auto`* (0.5.8): the title is identified from the file name and folders and looked up — Wikipedia first (summary, cast as "actor as character", the localised titles where Wikipedia has them), then your SearXNG, then the Brave API under a daily cap when SearXNG found too little; confirmed as a film or series, cached per title, every query recorded. The sheet gets the cast and relationships as **priors** — the dialogue wins where it contradicts them — and the glossary the localised title. Only the title and a search term leave the machine, and raw page text never reaches a translation prompt: it reaches the sheet builder alone, which extracts facts into the structured sheet the translator then sees, with the sources kept |
 | language ID | per ~10 s of speech, or per speaker turn: whisper's probability + Qwen's decode + the words' script and function words all have to agree; switch points refined to the exact span; a short run of another language needs strong evidence |
 | chunks · ASR | ≤ 30 s, one language each, covering the whole timeline (only the noise floor is skipped); both engines decode every chunk with its language forced; checkpointed per chunk |
@@ -261,7 +262,12 @@ formal form longer; a calibration for Polish and Greek in 0.6.0 recovered Polish
 and Greek on neither. In this benchmark the lookup was crucial: without it the same arm scored *below* the
 baseline on French (65 % against 77 %), because an unidentified character was given formal address — which
 0.6.2 stops: a gap in the sheet now gives no rule at all, and such lines are translated as they would be without
-a sheet. A voice is mapped to a named character only when the sheet quotes a line that shows it; otherwise it
+a sheet (measured 10-08: French back to 74 % without the lookup). How *colleagues* address each other turned out
+to be the one rule that differs by language: a night with "colleagues go informal" lifted French, German, Czech
+and Russian and cost Spanish, Greek and Polish; a night with colleagues left to the dialogue did the reverse,
+because a model with no rule falls back to the formal form. So the renderer now states the measured convention per
+language — informal between colleagues in French, German, Czech and Russian; formal in Spanish, Greek and Polish —
+and "unknown" elsewhere. Three films' worth of evidence, no more. A voice is mapped to a named character only when the sheet quotes a line that shows it; otherwise it
 stays an anonymous speaker tag. `regscore` pairs each human cue with the generated cue that overlaps it most in
 time, and scores only the pairs where the human line shows the feature. The 26B with the same resolver, measured
 on the `16gb`, `12gb` and `8gb` splits, matches the 31B on chrF++ within a point and holds its register on the

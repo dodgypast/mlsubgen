@@ -74,16 +74,24 @@ def merge_sheet(state: dict, sheet: list[dict], episode: str) -> dict:
         name = (s.get("name") or "").strip()
         if not name:
             continue
-        known = by_name.get(name.lower()) or alias_to.get(name.lower())
+        # the name as the dialogue's own script writes it (0.6.2.3): an episode's sheet may call the boy しんのすけ
+        # where an earlier one said Shin-chan; the source-script form is what both share, so it is matched and kept
+        src_name = (s.get("source_name") or "").strip()
+        known = by_name.get(name.lower()) or alias_to.get(name.lower()) or (alias_to.get(src_name.lower()) if src_name else None)
         if known is None:
             entry = {"name": name, "aliases": list(s.get("aliases") or []), "gender": s.get("gender", "?"), "age": s.get("age", "unknown"),
                      "role": s.get("role", ""), "relations": [{"to": r.get("to"), "relation": r.get("relation")} for r in (s.get("relations") or []) if r.get("to")]}
+            if src_name and src_name.lower() != name.lower():
+                entry["aliases"].append(src_name)
             state.setdefault("characters", []).append(entry)
             by_name[name.lower()] = entry
+            for a in entry["aliases"]:
+                alias_to[a.lower()] = entry
             continue
-        for a in s.get("aliases") or []:
+        for a in list(s.get("aliases") or []) + ([src_name] if src_name else []) + ([name] if name.lower() != known["name"].lower() else []):
             if a and a.lower() not in {x.lower() for x in known.get("aliases", [])} and a.lower() != known["name"].lower():
                 known.setdefault("aliases", []).append(a)
+                alias_to[a.lower()] = known
         if known.get("gender", "?") == "?" and s.get("gender", "?") != "?":
             known["gender"] = s["gender"]
         if known.get("age", "unknown") == "unknown" and s.get("age", "unknown") != "unknown":

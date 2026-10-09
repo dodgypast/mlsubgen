@@ -2289,6 +2289,12 @@ def cmd_selftest(a: argparse.Namespace) -> int:
     _sr.merge_sheet(_st, [{"name": "Shinnosuke", "aliases": ["Shin"], "gender": "m", "age": "child"}, {"name": "Misae", "gender": "f", "age": "adult", "role": "the mother"},
                           {"name": "Hiroshi", "gender": "m", "age": "adult"}], "ep65")
     assert [c["name"] for c in _st["characters"]] == ["Shin-chan", "Misae", "Hiroshi"], "an alias merges into the known name; a new name is added"
+    # the source-script name matches across episodes (0.6.2.3): ep64 says Shin-chan (しんのすけ), ep66 says しんのすけ
+    _st2 = {"series": "y", "characters": [], "glossary": {}, "episodes": []}
+    _sr.merge_sheet(_st2, [{"name": "Shin-chan", "source_name": "しんのすけ", "gender": "m", "age": "child"}, {"name": "Misae", "source_name": "みさえ", "gender": "f", "age": "adult"}], "ep64")
+    _sr.merge_sheet(_st2, [{"name": "しんのすけ", "gender": "m", "age": "child"}, {"name": "Misae", "source_name": "みさえ", "gender": "f", "age": "adult"}, {"name": "Shinnosuke", "source_name": "しんのすけ", "gender": "m", "age": "child"}], "ep66")
+    assert [c["name"] for c in _st2["characters"]] == ["Shin-chan", "Misae"], _st2["characters"]
+    assert "しんのすけ" in _st2["characters"][0]["aliases"] and "Shinnosuke" in _st2["characters"][0]["aliases"]
     assert "Shin" in _st["characters"][0]["aliases"] and _st["characters"][1]["gender"] == "f" and _st["episodes"] == ["ep64", "ep65"]
     _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ"}); _sr.merge_glossary(_st, "th", {"Shin-chan": "ชินจังงง", "Hiroshi": "ฮิโรชิ"})
     assert _sr.glossary_for(_st, "th") == {"Shin-chan": "ชินจัง", "Misae": "มิซาเอะ", "Hiroshi": "ฮิโรชิ"}, "the first rendering wins"

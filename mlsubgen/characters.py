@@ -36,7 +36,9 @@ FACTS_NOTE = ("\n\nKNOWN FACTS about this title, from public sources (priors —
 SHEET_PROMPT = ("Below is the dialogue of {genre}, in {language}.{voices_note}{facts_note} List the recurring characters who speak "
                 "(at most 8), one entry per person — if the same person is called both by a name and by a label "
                 "(\"Dad\", \"the father\", \"Will\"), list them ONCE under the name and put the other forms in "
-                "\"aliases\". For each give: \"name\", \"aliases\" (a list, may be empty), \"gender\" (\"m\", \"f\" or "
+                "\"aliases\". For each give: \"name\" (in Latin letters — the usual romanisation when the dialogue is "
+                "in another script), \"source_name\" (the name exactly as it is written in the dialogue's own script, "
+                "when that differs from \"name\"; otherwise omit it), \"aliases\" (a list, may be empty), \"gender\" (\"m\", \"f\" or "
                 "\"?\"), \"age\" (\"child\", \"teen\", \"adult\", \"elderly\" or \"unknown\"), \"role\" (a few words), "
                 "\"evidence\" (one or two short quotes from the dialogue that establish who they are — a vocative, a "
                 "self-description, another character's words), and \"relations\": a list of {{\"to\": <other "
@@ -66,10 +68,11 @@ RENDER_PROMPT = ("Here are the characters of {genre} (source {source}), as JSON:
                  "line and give only the genders. Where {target} distinguishes an informal and a formal address (tu/vous, "
                  "du/Sie, 반말/존댓말, plain/polite forms): friends, lovers, spouses, siblings, parents and children "
                  "take the INFORMAL form; strangers, a superior addressed by a subordinate, officials, a court, a "
-                 "customer take the FORMAL; for COLLEAGUES, partners at work and acquaintances write \"unknown — "
-                 "decide from the dialogue\" rather than a form: languages differ on them (German and Czech "
-                 "colleagues go informal; Spanish, Greek and Polish ones stay formal far longer) and the scene shows "
-                 "which. Where {target} addresses people by kin terms or role terms (Thai, Vietnamese, Burmese, "
+                 "customer take the FORMAL. COLLEAGUES, partners at work and acquaintances of equal standing differ by "
+                 "language, and the convention is this: in French, German, Czech and Russian they take the INFORMAL "
+                 "form once they work together as equals (tu, du, ty); in Spanish, Greek and Polish they keep the "
+                 "FORMAL form (usted, εσείς, pan/pani) unless the dialogue itself shows them on informal terms; in any "
+                 "other language write \"unknown — decide from the dialogue\". Where {target} addresses people by kin terms or role terms (Thai, Vietnamese, Burmese, "
                  "Khmer, Indonesian, Malay, Tagalog, Korean kin terms), choose each pair's OWN terms by relationship and "
                  "relative age, never a polite default: a teacher and a pupil take the school pair (Vietnamese thầy/cô "
                  "and em; Thai ครู and หนู or เธอ), a parent and a child the family pair (bố/mẹ and con; พ่อ/แม่ and "
@@ -130,6 +133,7 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
         if re.fullmatch(r"\[?S\d{1,2}\]?", d["name"].strip()):      # a voice tag is not a name (night one, 2026-10-05)
             continue
         sheet.append({"name": str(d.get("name"))[:40],
+                      "source_name": str(d.get("source_name", ""))[:40] if isinstance(d.get("source_name"), str) and d.get("source_name") != d.get("name") else "",
                       "aliases": [str(a)[:40] for a in (d.get("aliases") or []) if isinstance(a, str)][:6],
                       "gender": str(d.get("gender", "?"))[:1].lower(), "age": str(d.get("age", "unknown"))[:8],
                       "role": str(d.get("role", ""))[:60],
@@ -137,7 +141,7 @@ def build_sheet(client, texts: list[str], lang: str, genre: str, tagged: bool = 
                       "relations": [{"to": str(r.get("to", ""))[:40], "relation": str(r.get("relation", ""))[:30],
                                      "status": str(r.get("status", "equal"))[:6], "evidence": str(r.get("evidence", ""))[:120]}
                                     for r in (d.get("relations") or []) if isinstance(r, dict)][:8]})
-    names = {c["name"] for c in sheet} | {a for c in sheet for a in c["aliases"]}
+    names = {c["name"] for c in sheet} | {a for c in sheet for a in c["aliases"]} | {c["source_name"] for c in sheet if c["source_name"]}
     # evidence-gated (0.5.11): a voice maps to a character only with a quoted line behind it and a name the sheet
     # knows; a bare name, or an entry without evidence, is dropped — the translator then infers the speaker from the
     # dialogue for that voice, as it does without labels, rather than being told something unsupported
